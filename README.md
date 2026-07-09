@@ -1,5 +1,10 @@
 # ArchSetu
 
+[![CI](https://github.com/vishalkelur28-cyber/archsetu-innovations/actions/workflows/ci.yml/badge.svg)](https://github.com/vishalkelur28-cyber/archsetu-innovations/actions/workflows/ci.yml)
+[![npm @archsetu/core](https://img.shields.io/npm/v/%40archsetu%2Fcore?label=%40archsetu%2Fcore)](https://www.npmjs.com/package/@archsetu/core)
+[![npm @archsetu/cli](https://img.shields.io/npm/v/%40archsetu%2Fcli?label=%40archsetu%2Fcli)](https://www.npmjs.com/package/@archsetu/cli)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Pure static analysis for any codebase. No AI, no code ever leaves your machine.
 
 ArchSetu reads your source, builds a call graph, finds dead code, scores cyclomatic
