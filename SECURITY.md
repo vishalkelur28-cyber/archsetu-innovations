@@ -15,7 +15,7 @@ itself lives in a different, private repository.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Email **security@archsetu.com** with:
+Email **archsetu@gmail.com** with:
 
 - A description of the vulnerability and its potential impact
 - Steps to reproduce, ideally a minimal example
