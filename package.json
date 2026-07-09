@@ -8,13 +8,14 @@
     "pnpm": ">=9.0.0"
   },
   "scripts": {
-    "build": "pnpm -r run build",
-    "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r --if-present run test",
-    "clean": "pnpm -r run clean && rm -rf node_modules"
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "turbo": "^2.0.6",
     "typescript": "^5.5.2"
   },
   "packageManager": "pnpm@9.4.0"

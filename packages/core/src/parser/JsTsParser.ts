@@ -117,14 +117,16 @@ export const JsTsParser: LanguageParser = {
       const startLine = linesBefore(content, m.index) + 1;
       const { endLine } = extractFunctionBody(lines, startLine - 1);
       const isExported = content.slice(Math.max(0, m.index - 20), m.index).includes('export');
+      const extendsName = m[2]?.trim();
+      const implementsNames = m[3]?.split(',').map((s) => s.trim());
       classes.push({
         name: className,
         filePath,
         startLine,
         endLine: endLine + 1,
         methods: [],
-        extends: m[2]?.trim(),
-        implements: m[3]?.split(',').map((s) => s.trim()),
+        ...(extendsName ? { extends: extendsName } : {}),
+        ...(implementsNames ? { implements: implementsNames } : {}),
         isExported,
       });
     }

@@ -18,9 +18,9 @@
     "codebase-health"
   ],
   "bin": {
-    "archsetu": "./dist/cli.js"
+    "archsetu": "./dist/cli.mjs"
   },
-  "main": "./dist/cli.js",
+  "main": "./dist/cli.mjs",
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",

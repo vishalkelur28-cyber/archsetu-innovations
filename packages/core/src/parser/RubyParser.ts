@@ -41,7 +41,15 @@ export const RubyParser: LanguageParser = {
       const startLine = linesBefore(content, m.index) + 1;
       const { endLine } = extractIndentedBody(lines, startLine - 1);
       if (indent === 0) exports.push(name);
-      classes.push({ name, filePath, startLine, endLine: endLine + 1, methods: [], extends: m[3], isExported: indent === 0 });
+      classes.push({
+        name,
+        filePath,
+        startLine,
+        endLine: endLine + 1,
+        methods: [],
+        ...(m[3] ? { extends: m[3] } : {}),
+        isExported: indent === 0,
+      });
     }
 
     // ── Methods ───────────────────────────────────────────────────────────────

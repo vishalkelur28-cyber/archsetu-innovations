@@ -44,7 +44,15 @@ export const PhpParser: LanguageParser = {
       const startLine = linesBefore(content, m.index) + 1;
       const { endLine } = extractFunctionBody(lines, startLine - 1);
       exports.push(name);
-      classes.push({ name, filePath, startLine, endLine: endLine + 1, methods: [], extends: m[2], isExported: true });
+      classes.push({
+        name,
+        filePath,
+        startLine,
+        endLine: endLine + 1,
+        methods: [],
+        ...(m[2] ? { extends: m[2] } : {}),
+        isExported: true,
+      });
     }
 
     // ── Functions ─────────────────────────────────────────────────────────────
