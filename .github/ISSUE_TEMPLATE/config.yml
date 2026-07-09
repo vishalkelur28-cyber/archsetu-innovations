@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/vishalkelur28-cyber/archsetu-innovations/security/policy
+    about: Please report security issues via SECURITY.md, not a public issue
+  - name: Hosted platform (archsetu.com) issue
+    url: mailto:archsetu@gmail.com
+    about: Bugs in the web app, PR bot, or dashboards live in a separate private repo - email us instead

@@ -1,0 +1,52 @@
+{
+  "name": "@archsetu/core",
+  "version": "0.1.0",
+  "description": "Language-agnostic static analysis engine for ArchSetu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vishalkelur28-cyber/archsetu-innovations.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/vishalkelur28-cyber/archsetu-innovations#readme",
+  "bugs": "https://github.com/vishalkelur28-cyber/archsetu-innovations/issues",
+  "author": "ArchSetu",
+  "keywords": [
+    "static-analysis",
+    "code-analysis",
+    "call-graph",
+    "dead-code",
+    "complexity",
+    "codebase-health"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.2",
+    "ignore": "^5.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.5.2",
+    "vitest": "^1.6.0"
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  }
+}
