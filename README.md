@@ -1,8 +1,6 @@
 # ArchSetu
 
 [![CI](https://github.com/vishalkelur28-cyber/archsetu-innovations/actions/workflows/ci.yml/badge.svg)](https://github.com/vishalkelur28-cyber/archsetu-innovations/actions/workflows/ci.yml)
-[![npm @archsetu/core](https://img.shields.io/npm/v/%40archsetu%2Fcore?label=%40archsetu%2Fcore)](https://www.npmjs.com/package/@archsetu/core)
-[![npm @archsetu/cli](https://img.shields.io/npm/v/%40archsetu%2Fcli?label=%40archsetu%2Fcli)](https://www.npmjs.com/package/@archsetu/cli)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Pure static analysis for any codebase. No AI, no code ever leaves your machine.
@@ -27,8 +25,14 @@ with no signup.
 ## Quick start
 
 ```bash
-npx @archsetu/cli analyze ./my-project
+git clone https://github.com/vishalkelur28-cyber/archsetu-innovations.git
+cd archsetu-innovations
+pnpm install && pnpm build
+node packages/cli/dist/cli.mjs analyze ./my-project
 ```
+
+(Once `@archsetu/cli` is published to npm, this becomes a one-liner:
+`npx @archsetu/cli analyze ./my-project` — not live yet.)
 
 ```
 $ archsetu analyze ./my-project
