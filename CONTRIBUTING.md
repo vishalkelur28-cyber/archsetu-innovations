@@ -132,4 +132,4 @@ in most codebases.
 ## Code of Conduct
 
 This project follows the [Contributor Covenant](./CODE_OF_CONDUCT.md). Report
-violations to archsetu@gmail.com.
+violations to coder@archsetu.com.
