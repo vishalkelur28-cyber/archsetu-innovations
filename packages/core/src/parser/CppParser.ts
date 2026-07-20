@@ -107,6 +107,14 @@ function parseParams(raw: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * A macro-shaped identifier: SCREAMING_SNAKE_CASE, C/C++'s own convention for
+ * preprocessor macros (assert-style macros, NAN_METHOD-style native-binding
+ * macros, etc.) - these aren't real function calls and would otherwise
+ * pollute the call graph with names that never match any parsed function.
+ */
+const MACRO_SHAPED = /^[A-Z_][A-Z0-9_]*$/;
+
 function extractCalls(body: string, selfName: string): string[] {
   const calls = new Set<string>();
   const pattern = /\b(\w+)\s*\(/g;
@@ -114,7 +122,16 @@ function extractCalls(body: string, selfName: string): string[] {
   const SKIP = new Set(['if', 'for', 'while', 'switch', 'return', 'sizeof', 'typeof', 'new', 'delete', selfName]);
   while ((m = pattern.exec(body)) !== null) {
     const n = m[1];
-    if (n && !SKIP.has(n) && /^[a-z_]/.test(n)) calls.add(n);
+    // Previously required a lowercase-starting name here, intended to filter
+    // out constructor-style calls like `MyClass(x)`. That blanket rule also
+    // threw away every genuine call to a PascalCase-named function - which
+    // is the standard C++ function-naming convention in large real-world
+    // codebases (Google/Chromium style, and by extension Electron's own C++,
+    // plus most native Node binding entry points). The result was systematic
+    // false "dead code" for any C++ codebase using that convention. A
+    // SCREAMING_SNAKE_CASE check catches the macro-noise case without also
+    // discarding legitimate PascalCase calls.
+    if (n && !SKIP.has(n) && !MACRO_SHAPED.test(n)) calls.add(n);
   }
   return Array.from(calls);
 }

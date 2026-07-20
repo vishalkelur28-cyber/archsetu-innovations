@@ -23,6 +23,34 @@ export type SupportedLanguage =
   | 'shell'
   | 'html'
   | 'css'
+  | 'lua'
+  | 'perl'
+  | 'haskell'
+  | 'elixir'
+  | 'objectivec'
+  | 'zig'
+  | 'solidity'
+  | 'powershell'
+  | 'groovy'
+  | 'ocaml'
+  | 'erlang'
+  | 'clojure'
+  | 'fsharp'
+  | 'julia'
+  | 'nim'
+  | 'crystal'
+  | 'vimscript'
+  | 'elisp'
+  | 'makefile'
+  | 'dockerfile'
+  | 'terraform'
+  | 'sql'
+  | 'vue'
+  | 'svelte'
+  | 'yaml'
+  | 'protobuf'
+  | 'graphql'
+  | 'batch'
   | 'unknown';
 
 export interface ParsedFunction {
@@ -32,6 +60,15 @@ export interface ParsedFunction {
   endLine: number;
   parameters: string[];
   isExported: boolean;
+  /**
+   * True when this function is the file's default export (`export default
+   * function name() {}`), as opposed to a named export (`export function
+   * name() {}`) or not exported at all. Only populated by parsers that can
+   * distinguish the two (currently JsTsParser); other languages leave this
+   * undefined. Needed to match framework file-convention exports (e.g. a
+   * Next.js `page.tsx` default export) - see FrameworkConventions.ts.
+   */
+  isDefaultExport?: boolean;
   isAsync: boolean;
   /** Names of functions this function calls within the same repo */
   calls: string[];

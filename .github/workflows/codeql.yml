@@ -1,0 +1,35 @@
+name: CodeQL
+
+# Static security scanning (SAST) for the TypeScript/JavaScript codebase -
+# catches injection, unsafe deserialization, and similar vulnerability
+# patterns that typecheck/lint/tests don't look for at all. Free for public
+# repositories.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Catches new vulnerability patterns added to CodeQL's own rule set
+    # against code that hasn't changed recently, not just new commits.
+    - cron: '17 3 * * 1'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3

@@ -128,6 +128,174 @@ describe('dead code detection - reference-passing and property-assigned function
   });
 });
 
+describe('dead code in test files is never marked safe to remove', () => {
+  // Reproduces gajus/slonik (createErrorWithCodeAndConstraint, a *.test.ts
+  // helper) and Hufe921/canvas-editor (textEl/flushMicrotasks/etc under
+  // tests/factories and tests/helpers): a zero-caller export inside a test
+  // file may be genuinely unused, or may be wired up by a test-runner
+  // discovery mechanism this regex-based call graph can't model - either
+  // way it shouldn't be presented as a confident "safe to delete" the way a
+  // genuinely dead production function is.
+
+  it('does not mark a zero-caller non-exported function in a *.test.ts file as safe to remove', () => {
+    const source = `
+      function unusedTestHelper() {
+        return 1;
+      }
+    `;
+    const dead = findDeadCode([parseJs(source, '/repo/src/query.test/query.test.ts')]);
+    const finding = dead.find((d) => d.function.name === 'unusedTestHelper');
+    expect(finding?.isSafeToRemove).toBe(false);
+  });
+
+  it('does not mark a zero-caller function under a tests/ directory as safe to remove', () => {
+    const source = `
+      export function textEl(value) {
+        return { value };
+      }
+    `;
+    const dead = findDeadCode([parseJs(source, '/repo/tests/factories/elements.ts')]);
+    const finding = dead.find((d) => d.function.name === 'textEl');
+    expect(finding?.isSafeToRemove).toBe(false);
+  });
+
+  it('still marks a zero-caller non-exported function in a normal (non-test) file as safe to remove', () => {
+    // Regression guard: the test-file check narrows safety, it doesn't
+    // disable the existing exported/non-exported distinction elsewhere.
+    const source = `
+      function trulyUnusedHelper() {
+        return 1;
+      }
+    `;
+    const dead = findDeadCode([parseJs(source, '/repo/src/utils.ts')]);
+    const finding = dead.find((d) => d.function.name === 'trulyUnusedHelper');
+    expect(finding?.isSafeToRemove).toBe(true);
+  });
+});
+
+describe('cross-language call resolution', () => {
+  it('does not flag a PascalCase C++ function as dead when called by its camelCase JS-exposed name', () => {
+    // Mirrors a real native-binding pattern: a C++ function using the
+    // Chromium/Electron PascalCase convention, exposed to JS under a
+    // different, camelCase name via a binding table.
+    const cppSource = `
+      void CreateWindow(int width, int height) {
+        InitBuffer();
+      }
+    `;
+    const jsSource = `
+      function launch() {
+        addon.createWindow(800, 600);
+      }
+    `;
+    const cppFile = parseFile(cppSource, '/fake/window.cpp');
+    const jsFile = parseFile(jsSource, '/fake/launch.js');
+    if (!cppFile || !jsFile) throw new Error('expected both parsers to handle these fixtures');
+
+    const dead = findDeadCode([cppFile, jsFile]);
+    expect(dead.map((d) => d.function.name)).not.toContain('CreateWindow');
+  });
+
+  it('does not apply the cross-language fallback within the same language (regression guard)', () => {
+    // Two genuinely distinct C++ functions that happen to normalize to the
+    // same form - neither is called by anything, so both should still be
+    // flagged. Proves the normalized index only bridges a language
+    // boundary, rather than papering over genuine same-language misses.
+    const cppSource = `
+      void create_window() {
+        DoNothing();
+      }
+      void CreateWindow() {
+        DoNothing();
+      }
+    `;
+    const cppFile = parseFile(cppSource, '/fake/window2.cpp');
+    if (!cppFile) throw new Error('expected CppParser to handle this fixture');
+
+    const dead = findDeadCode([cppFile]);
+    const names = dead.map((d) => d.function.name);
+    expect(names).toContain('create_window');
+    expect(names).toContain('CreateWindow');
+  });
+});
+
+describe('CppParser call extraction', () => {
+  it('recognizes calls to PascalCase-named functions (the Chromium/Electron C++ convention)', () => {
+    // Previously any call whose name didn't start lowercase was silently
+    // dropped (meant to filter constructor-style `MyClass(x)` calls), which
+    // also discarded every genuine call to a PascalCase function - the
+    // standard convention in large real-world C++ codebases.
+    const source = `
+      void InitializeBuffer() {}
+      void CreateWindow() {
+        InitializeBuffer();
+      }
+    `;
+    const file = parseFile(source, '/fake/win.cpp');
+    if (!file) throw new Error('expected CppParser to handle this fixture');
+    const dead = findDeadCode([file]);
+    expect(dead.map((d) => d.function.name)).not.toContain('InitializeBuffer');
+  });
+});
+
+describe('ShellParser call extraction', () => {
+  it('recognizes a call to a function whose name has no underscore', () => {
+    const source = `
+      deploy() {
+        echo "deploying"
+      }
+      main() {
+        deploy
+      }
+    `;
+    const file = parseFile(source, '/fake/deploy.sh');
+    if (!file) throw new Error('expected ShellParser to handle this fixture');
+    const dead = findDeadCode([file]);
+    expect(dead.map((d) => d.function.name)).not.toContain('deploy');
+  });
+
+  it('recognizes a call inside an if condition (if cmd; then)', () => {
+    const source = `
+      verifyConfig() {
+        return 0
+      }
+      main() {
+        if verifyConfig; then
+          echo ok
+        fi
+      }
+    `;
+    const file = parseFile(source, '/fake/check.sh');
+    if (!file) throw new Error('expected ShellParser to handle this fixture');
+    const dead = findDeadCode([file]);
+    expect(dead.map((d) => d.function.name)).not.toContain('verifyConfig');
+  });
+});
+
+describe('deadCodeRatio excludes exported "possibly public API" functions from scoring', () => {
+  it('still lists an exported, zero-caller function as dead code but never as safe to remove', () => {
+    // This is what RepoAnalyzer's deadCodeRatio filters on: exported dead
+    // findings are excluded from the score-driving ratio (a library's
+    // public API is called by external consumers this analysis never sees),
+    // but still surfaced here for informational purposes.
+    // The export must sit at true column 0 - JsTsParser treats indentation
+    // as a signal for "is this actually module-top-level" (a reasonable
+    // heuristic for real files, where nested code is indented), so an
+    // artificially-indented fixture here would misreport isExported: false
+    // regardless of the `export` keyword.
+    const source = `export function publicHelper() {
+  return 1;
+}
+`;
+    const file = parseFile(source, '/fake/lib.ts');
+    if (!file) throw new Error('expected JsTsParser to handle this fixture');
+    const dead = findDeadCode([file]);
+    const finding = dead.find((d) => d.function.name === 'publicHelper');
+    expect(finding).toBeDefined();
+    expect(finding?.isSafeToRemove).toBe(false);
+  });
+});
+
 describe('HealthScorer - express-shaped fixture should not score as a D', () => {
   it('produces a healthy score/grade when the dead-code ratio is near zero', () => {
     // Reflects the corrected real-world result: expressjs/express went from

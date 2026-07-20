@@ -37,7 +37,8 @@
   },
   "dependencies": {
     "fast-glob": "^3.3.2",
-    "ignore": "^5.3.1"
+    "ignore": "^5.3.1",
+    "simple-git": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

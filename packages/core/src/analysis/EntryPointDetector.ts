@@ -1,6 +1,7 @@
 import path from 'path';
 import type { FileAnalysis, ParsedFunction } from '../types/parser.types.js';
 import type { EntryPoint, EntryPointType } from '../types/analysis.types.js';
+import { frameworkConventionFor } from './FrameworkConventions.js';
 
 /**
  * Detects application entry points across all supported languages.
@@ -128,6 +129,20 @@ function detectFunctionEntryPoint(fn: ParsedFunction, relPath: string): EntryPoi
       startLine: fn.startLine,
       type: 'cli',
       description: `${fn.name}() - CLI command handler`,
+      language: fn.language,
+    };
+  }
+
+  // Framework-reserved exports called implicitly by file-location convention
+  // (Next.js generateMetadata, a page.tsx/layout.tsx default export, etc.)
+  const framework = frameworkConventionFor(fn.filePath, fn.name, fn.isDefaultExport ?? false);
+  if (framework) {
+    return {
+      name: fn.name,
+      filePath: fn.filePath,
+      startLine: fn.startLine,
+      type: 'other',
+      description: `${fn.name}() - ${framework} convention, called implicitly by the framework`,
       language: fn.language,
     };
   }

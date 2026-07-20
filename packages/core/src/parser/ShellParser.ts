@@ -53,12 +53,51 @@ export const ShellParser: LanguageParser = {
 };
 
 function linesBefore(c: string, i: number) { return c.slice(0, i).split('\n').length - 1; }
+
+/**
+ * Matches an identifier in "command position" - the start of a statement
+ * (line start, or after `;`, `&&`, `||`, `|`, or an opening `(`), optionally
+ * indented. Shell function calls have no required parentheses (`myfunc arg1
+ * arg2`, not `myfunc(arg1, arg2)`), so a bare word-boundary scan over the
+ * whole body would match every variable name, argument, and string token
+ * too - the previous implementation tried to filter that noise down with
+ * "must be lowercase and contain an underscore," which is just a common
+ * naming convention, not a rule; any real function named e.g. `deploy` or
+ * `build` (no underscore) was silently never recognized as called from
+ * within its own script. Anchoring on command position is a more accurate
+ * (though still heuristic) signal for "this identifier is being invoked,"
+ * independent of what it happens to be named.
+ */
+const COMMAND_POSITION = /(?:^|[\n;(]|&&|\|\||\|)\s*(\w+)\b/g;
+
+/**
+ * A second, independent pass for `if cmd; then` / `while cmd; do` / `elif
+ * cmd; then` / `until cmd; do` - the command right after these keywords.
+ * This can't just be another alternative folded into COMMAND_POSITION: a
+ * single shared regex advances its lastIndex past whichever alternative
+ * matches first, so once the newline-triggered branch consumes `if` itself
+ * as its captured word, the engine's cursor is already past `if` and can
+ * never separately recognize it as a keyword introducing the next command -
+ * the real command name right after it (`cmd`) gets silently skipped. A
+ * fully separate pass, re-scanning the same text independently, has no such
+ * lastIndex conflict with the first pass.
+ */
+const KEYWORD_COMMAND = /\b(?:if|elif|while|until)\s+(\w+)/g;
+
 function extractCalls(body: string, self: string): string[] {
-  const calls = new Set<string>(); const p = /\b(\w+)\b/g; let m: RegExpExecArray | null;
-  const SKIP = new Set(['if', 'fi', 'then', 'else', 'elif', 'for', 'in', 'do', 'done', 'while', 'until', 'case', 'esac', 'function', 'return', 'local', 'export', 'echo', 'printf', 'read', 'cd', 'exit', self]);
-  while ((m = p.exec(body)) !== null) {
-    const n = m[1];
-    if (n && !SKIP.has(n) && /^[a-z_]/.test(n) && n.includes('_')) calls.add(n);
+  const calls = new Set<string>();
+  let m: RegExpExecArray | null;
+  const SKIP = new Set([
+    'if', 'fi', 'then', 'else', 'elif', 'for', 'in', 'do', 'done', 'while', 'until',
+    'case', 'esac', 'function', 'return', 'local', 'export', 'echo', 'printf', 'read',
+    'cd', 'exit', 'set', 'trap', 'shift', 'source', self,
+  ]);
+  for (const pattern of [COMMAND_POSITION, KEYWORD_COMMAND]) {
+    const re = new RegExp(pattern.source, 'g');
+    while ((m = re.exec(body)) !== null) {
+      const n = m[1];
+      if (n && !SKIP.has(n)) calls.add(n);
+    }
   }
   return Array.from(calls);
 }

@@ -24,11 +24,16 @@ export { buildOnboardingGuide } from './analysis/OnboardingGuide.js';
 export { generatePrDescriptionDraft } from './analysis/PrDescriptionGenerator.js';
 export { compareAnalyses } from './analysis/AnalysisComparator.js';
 export { checkDependencyHygiene } from './analysis/DependencyHygiene.js';
+export { analyzeGitHistory, GIT_HISTORY_MAX_COMMITS } from './analysis/GitHistoryAnalyzer.js';
+export { analyzeSecurityRisk } from './analysis/SecurityRiskAnalyzer.js';
 
 // Parser utilities (used by CLI for per-file analysis)
 export { parseFile } from './parser/ParserRegistry.js';
 export { detectLanguage } from './parser/LanguageDetector.js';
 export { walkRepo } from './utils/fileUtils.js';
+export { detectMonorepo } from './utils/monorepoUtils.js';
+export { detectTsPathAliases, isLocalAliasImport } from './utils/tsconfigUtils.js';
+export { isFrameworkReservedExport, frameworkConventionFor } from './analysis/FrameworkConventions.js';
 
 // Types re-exported for consumers
 export type {
@@ -56,10 +61,23 @@ export type {
   OnboardingStopReason,
   UndeclaredImport,
   DependencyHygieneResult,
+  GitHistoryResult,
+  RepoBusFactor,
+  FileOwnership,
+  FileChurn,
+  CommitAuthor,
+  BusFactorRisk,
+  SecurityFinding,
+  SecurityFindingCategory,
+  SecuritySeverity,
+  SecurityRiskResult,
 } from './types/analysis.types.js';
 
 export type { ChangedFunctionSummary, PrDescriptionDraft } from './analysis/PrDescriptionGenerator.js';
 export type { AnalysisDiff } from './analysis/AnalysisComparator.js';
+export type { MonorepoInfo, DeclaredDependencySource } from './utils/monorepoUtils.js';
+export type { TsAliasSource } from './utils/tsconfigUtils.js';
+export type { FrameworkConvention } from './analysis/FrameworkConventions.js';
 
 export type {
   ParsedFunction,

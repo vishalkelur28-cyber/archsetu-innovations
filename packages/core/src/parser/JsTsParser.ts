@@ -16,7 +16,16 @@ const CLASS_METHOD = /^[ \t]+(?:(?:public|private|protected|static|async|overrid
 /** Class declaration */
 const CLASS_DECL = /^[ \t]*(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>., ]+))?(?:\s+implements\s+([\w<>., ]+))?\s*\{/m;
 
-/** ES module imports */
+/**
+ * ES module imports.
+ *
+ * TODO(known false positive, out of scope for the monorepo/framework-convention
+ * fixes): this has no awareness of template literals, so an `import ... from
+ * '${expr}'`-shaped line embedded inside a backtick string (e.g. a test fixture
+ * that generates source code as a string) gets matched as a real import. Seen on
+ * liam-hq/liam (frontend/packages/schema/src/parser/drizzle/__tests__/unified.test.ts,
+ * flagged "${config.imports.core}" as an undeclared package).
+ */
 const IMPORT_STMT = /^[ \t]*import\s+(?:type\s+)?(?:(.+?)\s+from\s+)?['"](.*?)['"]/gm;
 
 /** ES module exports */
@@ -145,6 +154,10 @@ export const JsTsParser: LanguageParser = {
       const isExported =
         content.slice(Math.max(0, m.index - 5), m.index + 10).includes('export') ||
         isCommonJsExported(content, name);
+      // m[0] is the full match starting at the line's own leading whitespace, so
+      // it already contains "export default" verbatim when present - no need to
+      // slice content separately the way the (looser) isExported check does.
+      const isDefaultExport = /^[ \t]*export\s+default\s+/.test(m[0]);
       const params = parseParams(m[2] ?? '');
       const { body, endLine } = extractFunctionBody(lines, startLine - 1);
       const calls = extractCalls(body, name);
@@ -155,6 +168,7 @@ export const JsTsParser: LanguageParser = {
         endLine: endLine + 1,
         parameters: params,
         isExported,
+        isDefaultExport,
         isAsync,
         calls,
         complexity: calculateComplexity(body),

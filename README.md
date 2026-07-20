@@ -25,14 +25,8 @@ with no signup.
 ## Quick start
 
 ```bash
-git clone https://github.com/vishalkelur28-cyber/archsetu-innovations.git
-cd archsetu-innovations
-pnpm install && pnpm build
-node packages/cli/dist/cli.mjs analyze ./my-project
+npx @archsetuweb/cli analyze ./my-project
 ```
-
-(Once `@archsetu/cli` is published to npm, this becomes a one-liner:
-`npx @archsetu/cli analyze ./my-project` — not live yet.)
 
 ```
 $ archsetu analyze ./my-project
@@ -48,11 +42,20 @@ $ archsetu analyze ./my-project
 Or install it globally:
 
 ```bash
-npm install -g @archsetu/cli
+npm install -g @archsetuweb/cli
 archsetu analyze .
 archsetu health .        # just the health score
 archsetu dead-code .     # just the dead functions
 archsetu analyze . --json > report.json
+```
+
+To build from source instead:
+
+```bash
+git clone https://github.com/vishalkelur28-cyber/archsetu-innovations.git
+cd archsetu-innovations
+pnpm install && pnpm build
+node packages/cli/dist/cli.mjs analyze ./my-project
 ```
 
 ## Using the engine directly
@@ -78,7 +81,10 @@ bundle.
 ## Supported languages
 
 JavaScript, TypeScript, Python, Java, Go, Rust, C, C++, C#, Ruby, PHP, Kotlin, Swift,
-Scala, Dart, R, Shell, HTML, CSS.
+Scala, Dart, R, Shell, HTML, CSS, Lua, Perl, Haskell, Elixir, Objective-C, Zig,
+Solidity, PowerShell, Groovy, OCaml, Erlang, Clojure, F#, Julia, Nim, Crystal,
+Vimscript, Emacs Lisp, Makefile, Dockerfile, Terraform, SQL, Vue, Svelte, YAML,
+Protobuf, GraphQL, Batch — 47+ languages total.
 
 Each language is a self-contained parser implementing one shared interface
 (`LanguageParser` in [`packages/core/src/types/parser.types.ts`](./packages/core/src/types/parser.types.ts)).
@@ -96,6 +102,11 @@ else in the engine. See [CONTRIBUTING.md](./CONTRIBUTING.md) for a walkthrough.
 - **Change impact** — for any file, everything that transitively imports it
 - **Health score** — a weighted composite of dead code, complexity, duplication,
   test-file ratio, and oversized files
+- **Git history / bus factor** — ownership and churn per file from commit history, and
+  which files depend on the fewest people, all from `git log`, no external service
+- **Security risk heuristics** — hardcoded secrets, unsafe dynamic execution, and
+  string-built SQL, via regex-based pattern matching (not a full SAST engine)
+- **Dependency hygiene** — outdated or unused entries in `package.json`
 
 None of this uses an LLM or any external model. It's parsing, regex, and graph
 traversal — deterministic, auditable, and fast enough to run on every commit.

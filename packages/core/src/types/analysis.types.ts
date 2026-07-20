@@ -199,6 +199,88 @@ export interface DependencyHygieneResult {
   undeclaredImports: UndeclaredImport[];
 }
 
+// ─── Git History ──────────────────────────────────────────────────────────────
+// Computed from a bounded slice of commit history (see GIT_HISTORY_MAX_COMMITS
+// in GitHistoryAnalyzer.ts) - deliberately "recent activity," not "entire
+// project archaeology." A repo cloned specifically for analysis only fetches
+// that bounded depth, so results reflect who's actively maintaining the code
+// now, not every contributor since the first commit.
+
+export interface CommitAuthor {
+  name: string;
+  email: string;
+}
+
+export interface FileOwnership {
+  filePath: string;
+  /** Every distinct author who touched this file within the analyzed window, sorted by commit count descending. */
+  authors: Array<CommitAuthor & { commitCount: number; percentage: number }>;
+  /** The author with the most commits touching this file. */
+  primaryOwner: CommitAuthor;
+}
+
+export type BusFactorRisk = 'low' | 'medium' | 'high' | 'critical';
+
+export interface RepoBusFactor {
+  /**
+   * Truck factor: the minimum number of top contributors (by files owned)
+   * whose combined departure would leave over half the codebase's files
+   * without their primary maintainer. 1 means a single person's departure
+   * already crosses that line.
+   */
+  busFactor: number;
+  topContributors: Array<CommitAuthor & { fileCount: number; percentageOfCodebase: number }>;
+  riskLevel: BusFactorRisk;
+}
+
+export interface FileChurn {
+  filePath: string;
+  commitCount: number;
+  authorCount: number;
+  lastModified: string;
+}
+
+export interface GitHistoryResult {
+  /** How many commits were actually walked - always ≤ the configured bound. */
+  commitsAnalyzed: number;
+  oldestCommitDate: string | null;
+  newestCommitDate: string | null;
+  busFactor: RepoBusFactor;
+  fileOwnership: FileOwnership[];
+  /** Top files by commit count within the analyzed window, descending. */
+  highChurnFiles: FileChurn[];
+}
+
+// ─── Security Risk ────────────────────────────────────────────────────────────
+// Regex-based heuristics only (no AST, no network calls, no vulnerability
+// database lookups) - see SecurityRiskAnalyzer.ts for the full rationale and
+// the accepted false-positive tradeoff.
+
+export type SecurityFindingCategory =
+  | 'hardcoded-secret'
+  | 'dynamic-code-execution'
+  | 'sql-injection-risk';
+
+export type SecuritySeverity = 'high' | 'medium' | 'low';
+
+export interface SecurityFinding {
+  category: SecurityFindingCategory;
+  severity: SecuritySeverity;
+  filePath: string;
+  /** 1-indexed line number. */
+  line: number;
+  description: string;
+  /** Matched line, trimmed - secret VALUES are masked in place, never stored in full. */
+  lineText: string;
+}
+
+export interface SecurityRiskResult {
+  findings: SecurityFinding[];
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+}
+
 // ─── Full Repo Analysis ───────────────────────────────────────────────────────
 
 export interface LanguageBreakdown {
@@ -215,6 +297,21 @@ export interface RepoAnalysis {
   onboarding: OnboardingGuide;
   dependencyHygiene: DependencyHygieneResult;
   changeImpactGraph: ChangeImpactGraph;
+  /**
+   * null when the rootDir isn't a git repository, or has no commit history
+   * available (e.g. a fresh/empty repo) - never let a consumer assume this
+   * is always populated the way the other fields are.
+   */
+  gitHistory: GitHistoryResult | null;
+  /** Regex-based security heuristics - hardcoded secrets, unsafe dynamic execution, string-built SQL. */
+  securityRisk: SecurityRiskResult;
+  /**
+   * True when the repo had more eligible source files than walkRepo's cap
+   * (10,000 by default) and traversal was cut short - every metric below is
+   * computed from a partial file set, not the full repo. Surface this to
+   * the user rather than presenting a partial analysis as complete.
+   */
+  truncated: boolean;
   languageBreakdown: LanguageBreakdown;
   totalFunctions: number;
   totalFiles: number;

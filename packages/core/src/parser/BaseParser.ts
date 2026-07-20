@@ -133,12 +133,19 @@ export function stripStringsAndComments(code: string): string {
 }
 
 /**
- * Extracts the body of a function/method given its start position and source lines.
- * Uses brace matching for brace-delimited languages. Returns empty string on failure.
+ * Extracts the body of a function/method given its start position and source
+ * lines, by counting a matching pair of open/close characters. Defaults to
+ * `{`/`}` (every brace-delimited language parser in this codebase); pass
+ * `(`/`)` for paren-delimited languages (Lisp's `(defn ...)`, a SQL `CREATE
+ * TABLE (...)` column list). Returns the header line itself on failure
+ * (never throws) since a malformed/truncated file shouldn't abort the whole
+ * repo analysis.
  */
 export function extractFunctionBody(
   lines: string[],
   startLine: number, // 0-indexed
+  openChar = '{',
+  closeChar = '}',
 ): { body: string; endLine: number } {
   let depth = 0;
   let started = false;
@@ -147,8 +154,8 @@ export function extractFunctionBody(
   for (let i = startLine; i < lines.length; i++) {
     const line = lines[i] ?? '';
     for (const ch of line) {
-      if (ch === '{') { depth++; started = true; }
-      if (ch === '}') { depth--; }
+      if (ch === openChar) { depth++; started = true; }
+      if (ch === closeChar) { depth--; }
     }
     if (started && depth === 0) {
       endLine = i;

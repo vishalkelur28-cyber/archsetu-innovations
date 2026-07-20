@@ -3,6 +3,20 @@ import type { ComplexityReport, FileComplexity, FunctionComplexity } from '../ty
 import { complexityLevel } from '../parser/BaseParser.js';
 
 /**
+ * Math.max(...arr) and arr.push(...items) both spread their argument as
+ * individual call-stack arguments - fine for a handful of items, but
+ * `RangeError: Maximum call stack size exceeded` once an array reaches the
+ * tens of thousands (confirmed on posthog/posthog: 33,041 functions
+ * repo-wide crossed this on the `Math.max` below). Plain loops have no
+ * such limit regardless of array size.
+ */
+function maxOf(numbers: number[]): number {
+  let max = -Infinity;
+  for (const n of numbers) if (n > max) max = n;
+  return max;
+}
+
+/**
  * Aggregates per-function complexity scores into a repo-wide report.
  * Produces both file-level averages and a sorted list of the most complex functions.
  */
@@ -24,7 +38,7 @@ export function analyzeComplexity(fileAnalyses: FileAnalysis[]): ComplexityRepor
 
     const avgComplexity =
       funcComplexities.reduce((s, f) => s + f.complexity, 0) / funcComplexities.length;
-    const maxComplexity = Math.max(...funcComplexities.map((f) => f.complexity));
+    const maxComplexity = maxOf(funcComplexities.map((f) => f.complexity));
 
     files.push({
       filePath: file.filePath,
@@ -35,7 +49,7 @@ export function analyzeComplexity(fileAnalyses: FileAnalysis[]): ComplexityRepor
       functions: funcComplexities.sort((a, b) => b.complexity - a.complexity),
     });
 
-    allFunctions.push(...funcComplexities);
+    for (const fc of funcComplexities) allFunctions.push(fc);
   }
 
   // Sort files by avg complexity descending (hotspots first)
@@ -46,7 +60,7 @@ export function analyzeComplexity(fileAnalyses: FileAnalysis[]): ComplexityRepor
     allComplexities.length > 0
       ? allComplexities.reduce((s, c) => s + c, 0) / allComplexities.length
       : 1;
-  const maxComplexity = allComplexities.length > 0 ? Math.max(...allComplexities) : 1;
+  const maxComplexity = allComplexities.length > 0 ? maxOf(allComplexities) : 1;
 
   const mostComplex = [...allFunctions]
     .sort((a, b) => b.complexity - a.complexity)
