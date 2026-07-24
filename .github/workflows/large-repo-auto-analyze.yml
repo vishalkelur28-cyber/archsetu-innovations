@@ -1,0 +1,56 @@
+# Runs a large-repo analysis automatically on ArchSetu's own GitHub Actions
+# runner (2 vCPU / 7GB, real headroom the hosted Cloud Run worker doesn't
+# have), triggered server-side by apps/web/src/app/api/analyze/route.ts the
+# moment a submission exceeds AUTO_ROUTE_TO_ACTIONS_KB - the user never has
+# to know this path exists or set anything up themselves.
+#
+# Unlike apps/web/public/templates/archsetu-analyze.yml (the manual, "add
+# this to YOUR repo" template every large-repo submitter used to have to
+# set up by hand), this workflow lives in ArchSetu's own repo and clones the
+# TARGET repo as a plain step, rather than running via actions/checkout on
+# itself - so it can analyze *any* public repo on demand, not just one
+# that's already been configured to run it.
+#
+# Submits under a dedicated ArchSetu Bot account (see ARCHSETU_BOT_API_KEY
+# below) rather than any real user's identity, using the same
+# `archsetu submit` flow (POST /api/v1/submit -> upload -> complete) the
+# manual template already uses - that endpoint verifies the submitter has
+# real GitHub read access to the target repo, which the bot account
+# naturally has for any public repo.
+name: Large Repo Auto-Analyze
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: Target repo owner
+        required: true
+        type: string
+      repo:
+        description: Target repo name
+        required: true
+        type: string
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone target repo
+        run: |
+          git clone --depth 300 --single-branch --no-tags \
+            "https://github.com/${{ inputs.owner }}/${{ inputs.repo }}.git" target-repo
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install ArchSetu CLI
+        run: npm install -g @archsetuweb/cli
+
+      - name: Analyze and submit
+        env:
+          ARCHSETU_API_KEY: ${{ secrets.ARCHSETU_BOT_API_KEY }}
+          # Same reasoning as the manual template: GitHub's runner has 7GB
+          # RAM but Node caps its own heap well below that by default.
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: archsetu submit "${{ inputs.owner }}/${{ inputs.repo }}" target-repo
