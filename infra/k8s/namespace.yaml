@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: archsetu
+  labels:
+    # Pod Security Admission, enforcing the `restricted` profile.
+    #
+    # This is the single highest-value line in this directory. It is a
+    # namespace-level guarantee, checked by the API server at admission time,
+    # that no pod here can run as root, gain privileges, use host namespaces,
+    # mount hostPath volumes, or keep any Linux capability beyond what a
+    # normal process needs.
+    #
+    # It matters more than the equivalent settings on the Deployment below,
+    # because those only constrain the pod someone remembered to write
+    # correctly. This constrains every pod that will ever be created in this
+    # namespace, including one applied by hand at 2am during an incident.
+    # The Deployment's securityContext and this label say the same thing on
+    # purpose - one is the intent, the other is the enforcement.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    # Warn and audit on the same profile so a rejected manifest produces an
+    # explanation rather than a bare refusal.
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    app.kubernetes.io/name: archsetu

@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: archsetu
+
+# Order matters on a first apply: the namespace must exist before anything
+# lands in it, and the NetworkPolicy should be in place before the workload
+# starts rather than after, so there is no window where the worker has
+# unrestricted egress.
+resources:
+  - namespace.yaml
+  - networkpolicy.yaml
+  - worker.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: archsetu
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: ghcr.io/archsetu/worker
+    newTag: REPLACE_ME

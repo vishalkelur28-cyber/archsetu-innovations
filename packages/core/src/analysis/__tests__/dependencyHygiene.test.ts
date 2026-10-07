@@ -36,6 +36,17 @@ describe('checkDependencyHygiene', () => {
     expect(result.undeclaredImports).toHaveLength(0);
   });
 
+  it('does not flag `vscode`, VS Code\'s ambient extension-host module', () => {
+    // Confirmed real false positive on rust-lang/rust's bundled
+    // rust-analyzer VS Code extension - `vscode` is injected by the running
+    // editor, never a real npm dependency to declare.
+    const files = [parseJs(`import * as vscode from 'vscode';\nexport function activate() { return vscode.window; }`, '/repo/extension.ts')];
+    const sources = rootSource('/repo', JSON.stringify({ dependencies: {} }));
+
+    const result = checkDependencyHygiene(files, sources);
+    expect(result.undeclaredImports).toHaveLength(0);
+  });
+
   it('does not flag relative imports or Node builtins', () => {
     const files = [parseJs(`import fs from 'fs';\nimport { helper } from './utils.js';\nfunction run() { return fs.existsSync('.') && helper(); }`, '/repo/index.js')];
     const sources = rootSource('/repo', JSON.stringify({ dependencies: {} }));
@@ -171,6 +182,25 @@ describe('checkDependencyHygiene', () => {
 
       const result = checkDependencyHygiene(files, sources, tsAliasSources);
       expect(result.undeclaredImports.map((u) => u.packageName)).toEqual(['lodash']);
+    });
+  });
+
+  describe('non-JS/TS languages', () => {
+    it('never flags Rust `use` statements - confirmed as 15,886 false positives on rust-lang/rust', () => {
+      // package.json is a JS/TS-ecosystem concept - a `::`-separated Rust
+      // path like "std::collections::HashMap" has no npm-style separator to
+      // split on, so without a language guard the whole path becomes one
+      // "package name" and even standard-library imports get flagged.
+      const files = [
+        parseFile(
+          `use std::collections::HashMap;\nuse serde::Deserialize;\nfn run() -> HashMap<String, String> { HashMap::new() }`,
+          '/repo/src/main.rs',
+        ),
+      ].filter((f): f is FileAnalysis => f !== null);
+      const sources: DeclaredDependencySource[] = [{ dir: '/repo', declared: new Set([]) }];
+
+      const result = checkDependencyHygiene(files, sources);
+      expect(result.undeclaredImports).toHaveLength(0);
     });
   });
 });

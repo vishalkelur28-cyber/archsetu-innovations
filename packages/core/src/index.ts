@@ -25,7 +25,10 @@ export { generatePrDescriptionDraft } from './analysis/PrDescriptionGenerator.js
 export { compareAnalyses } from './analysis/AnalysisComparator.js';
 export { checkDependencyHygiene } from './analysis/DependencyHygiene.js';
 export { analyzeGitHistory, GIT_HISTORY_MAX_COMMITS } from './analysis/GitHistoryAnalyzer.js';
+export { scanGitHistoryForSecrets } from './analysis/GitHistorySecretScanner.js';
+export { extractDeclaredDependencies, normalizeNpmVersionRange } from './analysis/DependencyVersionExtractor.js';
 export { analyzeSecurityRisk } from './analysis/SecurityRiskAnalyzer.js';
+export { analyzeTestRisk } from './analysis/TestRiskAnalyzer.js';
 
 // Parser utilities (used by CLI for per-file analysis)
 export { parseFile } from './parser/ParserRegistry.js';
@@ -33,6 +36,7 @@ export { detectLanguage } from './parser/LanguageDetector.js';
 export { walkRepo } from './utils/fileUtils.js';
 export { detectMonorepo } from './utils/monorepoUtils.js';
 export { detectTsPathAliases, isLocalAliasImport } from './utils/tsconfigUtils.js';
+export { streamJson, gzipJsonStringify, writeJsonToStdout } from './utils/jsonStream.js';
 export { isFrameworkReservedExport, frameworkConventionFor } from './analysis/FrameworkConventions.js';
 
 // Types re-exported for consumers
@@ -71,6 +75,14 @@ export type {
   SecurityFindingCategory,
   SecuritySeverity,
   SecurityRiskResult,
+  HistoricalSecretFinding,
+  GitHistorySecretScanResult,
+  DeclaredDependency,
+  DependencySeverity,
+  DependencyVulnerability,
+  DependencyVulnScanResult,
+  TestRiskResult,
+  TestRiskHotspot,
 } from './types/analysis.types.js';
 
 export type { ChangedFunctionSummary, PrDescriptionDraft } from './analysis/PrDescriptionGenerator.js';

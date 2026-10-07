@@ -1,6 +1,6 @@
 {
   "name": "@archsetuweb/cli",
-  "version": "0.1.4",
+  "version": "0.1.16",
   "description": "ArchSetu CLI - analyze any local codebase from the terminal",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,8 @@
     "fast-glob": "^3.3.2",
     "ignore": "^5.3.1",
     "ora": "^8.0.1",
-    "simple-git": "^3.25.0"
+    "simple-git": "^4.0.2",
+    "yaml": "^2.5.1"
   },
   "devDependencies": {
     "@archsetu/core": "workspace:*",

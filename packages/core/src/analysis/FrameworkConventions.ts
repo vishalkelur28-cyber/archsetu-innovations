@@ -65,11 +65,49 @@ const NEXTJS_APP_ROUTER_CONVENTIONS: FrameworkConvention[] = [
 ];
 
 /**
+ * Found via the anomaly-sweep script (apps/web/scripts/anomaly-sweep.mjs)
+ * flagging whoiskatrin/sql-translator's dead-code ratio as a statistical
+ * outlier - not a repo anyone picked to test by hand. Its `pages/_app.tsx`
+ * and `pages/index.tsx` default exports (`MyApp`, `Home`) were flagged
+ * dead: real, still-common Next.js Pages Router files, called implicitly by
+ * the framework's file-based router exactly like App Router's page.tsx is,
+ * but with zero conventions registered for the older router at all.
+ */
+const NEXTJS_PAGES_ROUTER_CONVENTIONS: FrameworkConvention[] = [
+  {
+    framework: 'Next.js Pages Router',
+    filePattern: /(^|\/)pages\/_(app|document|error)\.tsx?$/,
+    namedExports: new Set(['getInitialProps']),
+    includesDefaultExport: true,
+  },
+  {
+    framework: 'Next.js Pages Router',
+    // Any file under pages/ (at any depth, e.g. pages/blog/[slug].tsx) whose
+    // filename doesn't start with `_` and isn't under pages/api/ is itself a
+    // route - Next.js calls its default export by file location, the same
+    // way App Router's page.tsx works, just without needing the literal
+    // filename "page.tsx".
+    filePattern: /(^|\/)pages\/(?!api\/)(?:.+\/)?[^_/][^/]*\.tsx?$/,
+    namedExports: new Set(['getInitialProps']),
+    includesDefaultExport: true,
+  },
+  {
+    framework: 'Next.js Pages Router',
+    filePattern: /(^|\/)pages\/api\/.+\.tsx?$/,
+    namedExports: new Set(['config']),
+    includesDefaultExport: true,
+  },
+];
+
+/**
  * All known framework conventions, across all frameworks. Add new frameworks
  * here (e.g. Remix's `loader`/`action` exports, SvelteKit's `+page.ts`
  * `load` export) as their own array, spread in below.
  */
-const FRAMEWORK_CONVENTIONS: FrameworkConvention[] = [...NEXTJS_APP_ROUTER_CONVENTIONS];
+const FRAMEWORK_CONVENTIONS: FrameworkConvention[] = [
+  ...NEXTJS_APP_ROUTER_CONVENTIONS,
+  ...NEXTJS_PAGES_ROUTER_CONVENTIONS,
+];
 
 /**
  * True if `exportName` in `filePath` is called implicitly by a known

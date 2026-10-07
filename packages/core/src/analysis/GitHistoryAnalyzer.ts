@@ -1,4 +1,4 @@
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import type {
   CommitAuthor,
   FileOwnership,
@@ -173,25 +173,66 @@ export function findHighChurnFiles(touches: CommitFileTouch[], limit = 10): File
 }
 
 /**
+ * How long a single `git log` call is allowed to run before this pass gives
+ * up on it. This is the only step in the whole analyzeRepo pipeline that
+ * spawns a real subprocess - every other pass is synchronous, in-memory JS -
+ * and unlike the initial clone (which has its own explicit hard-kill
+ * timeout), it previously had no timeout of its own at all. Confirmed as a
+ * real production failure: sindresorhus/execa (a 3MB repo - trivially small,
+ * clones and analyzes in under 2 seconds when reproduced locally) was
+ * repeatedly killed by the *outer* 900s whole-job timeout with "last known
+ * phase: analyzing" and no further detail, meaning something after that
+ * progress message hung completely, not just ran slowly - a hang, not a
+ * gradual slowdown, is this call's signature, not any of the synchronous
+ * passes before it. The exact underlying cause wasn't pinned down (it did
+ * not reproduce locally or in a real Linux/Cloud Shell environment, so it
+ * appears specific to the Cloud Run container itself), but this closes the
+ * real gap regardless: git history is explicitly a "bonus signal" per the
+ * doc comment below, so timing it out and returning null costs nothing an
+ * outright failure of the whole job wasn't already costing, while turning
+ * "the entire job silently vanishes for 15 minutes" into "this one optional
+ * signal is skipped, and everything else the analysis already computed
+ * still comes back."
+ */
+const GIT_LOG_TIMEOUT_MS = 60 * 1000;
+
+/**
  * Reads commit history from an already-cloned repo at rootDir. Returns null
  * rather than throwing for any reason (not a git repo, no commits, git
- * unavailable) - git history is a bonus signal layered on top of the static
- * analysis that has always been ArchSetu's core, and it must never be able
- * to fail an otherwise-successful analysis.
+ * unavailable, or now, taking too long) - git history is a bonus signal
+ * layered on top of the static analysis that has always been ArchSetu's
+ * core, and it must never be able to fail an otherwise-successful analysis.
+ *
+ * `timeoutMs` is a test-only seam (production always uses the real
+ * GIT_LOG_TIMEOUT_MS default) - it exists so the timeout path itself can be
+ * exercised in a fast unit test instead of only being provable by actually
+ * waiting 60 real seconds.
  */
-export async function analyzeGitHistory(rootDir: string): Promise<GitHistoryResult | null> {
+export async function analyzeGitHistory(rootDir: string, timeoutMs = GIT_LOG_TIMEOUT_MS): Promise<GitHistoryResult | null> {
   try {
     const git = simpleGit(rootDir);
     const isRepo = await git.checkIsRepo();
     if (!isRepo) return null;
 
-    const raw = await git.raw([
+    const rawPromise = git.raw([
       'log',
       `-n`,
       String(GIT_HISTORY_MAX_COMMITS),
       '--no-merges',
       `--format=${COMMIT_MARKER}%H|%an|%ae|%aI`,
       '--name-only',
+    ]);
+    // Promise.race abandons waiting on rawPromise, it does not cancel the
+    // underlying git subprocess - simple-git exposes no cancellation hook
+    // for a single .raw() call. An orphaned `git log` on a 300-commit-deep
+    // shallow clone is a bounded, small amount of leaked work, not a
+    // resource leak that compounds - a deliberately accepted tradeoff over
+    // the much worse status quo of the entire job hanging for 15 minutes.
+    const raw = await Promise.race([
+      rawPromise,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`git log timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+      }),
     ]);
 
     const touches = parseGitLogOutput(raw);

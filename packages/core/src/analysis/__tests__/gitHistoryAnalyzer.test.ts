@@ -1,9 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
+import { execSync } from 'child_process';
 import {
   parseGitLogOutput,
   buildFileOwnership,
   calculateBusFactor,
   findHighChurnFiles,
+  analyzeGitHistory,
   type CommitFileTouch,
 } from '../GitHistoryAnalyzer.js';
 
@@ -159,5 +164,52 @@ describe('findHighChurnFiles', () => {
     // git output, but the Set-based dedup should make it a non-issue anyway).
     const touches: CommitFileTouch[] = [touch('f.ts', 'jane@x.com', 'Jane', 'c1'), touch('f.ts', 'jane@x.com', 'Jane', 'c1')];
     expect(findHighChurnFiles(touches, 10)[0]?.commitCount).toBe(1);
+  });
+});
+
+describe('analyzeGitHistory', () => {
+  let dir: string | undefined;
+
+  afterEach(async () => {
+    // The timeout test below deliberately abandons a real, still-running git
+    // subprocess (that's the exact production behavior being tested) -
+    // Windows can briefly hold a file lock on the directory until that
+    // orphaned process actually exits, which races this cleanup. fs.rm's
+    // own built-in retry (maxRetries/retryDelay) handles that transient
+    // EBUSY the same way it already handles Windows' well-known transient
+    // EPERM/EBUSY on recursive deletes, instead of this being flaky.
+    if (dir) await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    dir = undefined;
+  });
+
+  async function makeRealGitRepo(): Promise<string> {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), 'archsetu-githistory-test-'));
+    execSync('git init -q', { cwd: d });
+    execSync('git config user.email test@example.com', { cwd: d });
+    execSync('git config user.name "Test"', { cwd: d });
+    await fs.writeFile(path.join(d, 'a.ts'), 'export const a = 1;\n');
+    execSync('git add a.ts && git commit -q -m "add a"', { cwd: d });
+    return d;
+  }
+
+  it('returns real commit history for a normal, fast-running repo', async () => {
+    dir = await makeRealGitRepo();
+    const result = await analyzeGitHistory(dir);
+    expect(result).not.toBeNull();
+    expect(result?.commitsAnalyzed).toBe(1);
+  });
+
+  it('gives up and returns null instead of hanging, when git takes longer than the timeout', async () => {
+    // A real repo and a real `git log` call - deliberately not mocking
+    // simple-git - with a 1ms budget no real subprocess can beat, so the
+    // timeout branch of the Promise.race is what actually wins here, not a
+    // simulated one. This is the regression test for the production bug:
+    // before the timeout existed, there was no way for this call to ever
+    // give up short of the caller's own unrelated, much longer outer
+    // timeout - confirmed as a real incident on sindresorhus/execa, killed
+    // by the *job's* 900s hard limit with no detail on what had hung.
+    dir = await makeRealGitRepo();
+    const result = await analyzeGitHistory(dir, 1);
+    expect(result).toBeNull();
   });
 });

@@ -11,12 +11,16 @@ import { detectEntryPointsFromAnalyses } from './EntryPointDetector.js';
 import { analyzeComplexity } from './ComplexityAnalyzer.js';
 import { estimateDuplicationRatio } from './DuplicationDetector.js';
 import { analyzeSecurityRisk } from './SecurityRiskAnalyzer.js';
+import { analyzeTestRisk } from './TestRiskAnalyzer.js';
 import { buildOnboardingGuide } from './OnboardingGuide.js';
 import { checkDependencyHygiene } from './DependencyHygiene.js';
 import { buildReverseDependencyGraph } from './ChangeImpactAnalyzer.js';
 import { analyzeGitHistory } from './GitHistoryAnalyzer.js';
+import { scanGitHistoryForSecrets } from './GitHistorySecretScanner.js';
+import { extractDeclaredDependencies } from './DependencyVersionExtractor.js';
 import { detectMonorepo } from '../utils/monorepoUtils.js';
 import { detectTsPathAliases } from '../utils/tsconfigUtils.js';
+import { capCallGraph, capComplexityDetail, capDeadCode } from './ResultSizeCapper.js';
 
 const OVERSIZED_LINE_THRESHOLD = 300;
 
@@ -133,6 +137,19 @@ export async function analyzeRepo(
   const dependencyHygiene = checkDependencyHygiene(fileAnalyses, dependencySources, tsAliasSources);
   const changeImpactGraph = buildReverseDependencyGraph(fileAnalyses);
   const gitHistory = await analyzeGitHistory(rootDir);
+  // Reuses the uncapped callGraph (below, capCallGraph only bounds the
+  // *stored* artifact) - the reachability walk needs every real edge, not a
+  // display-truncated subset, or a function could be misreported as
+  // untested purely because the edge proving otherwise got capped away.
+  const testRisk = analyzeTestRisk(callGraph, fileAnalyses, gitHistory);
+  // Runs after fileContentMap.clear() above and reads directly from the git
+  // object database instead - unlike securityRisk, this pass needs commit
+  // diffs, not already-parsed file content, so it was never a candidate to
+  // run in that same fileContentMap-alive window.
+  const gitHistorySecrets = await scanGitHistoryForSecrets(rootDir);
+  // Pure manifest parsing only - see DeclaredDependency's own doc comment
+  // for why the actual vulnerability lookup can't happen here.
+  const declaredDependencies = await extractDeclaredDependencies(rootDir);
 
   const avgComplexity = complexity.avgComplexity;
   const maxComplexity = complexity.maxComplexity;
@@ -141,7 +158,7 @@ export async function analyzeRepo(
   const health = calculateHealthScore({
     deadCodeRatio,
     avgComplexity,
-    maxComplexity,
+    highComplexityRatio: complexity.highComplexityRatio,
     testFileRatio,
     duplicationRatio,
     oversizedFileRatio,
@@ -168,18 +185,35 @@ export async function analyzeRepo(
   const primaryLanguage = (Object.entries(languageBreakdown)
     .sort(([, a], [, b]) => b - a)[0]?.[0] ?? 'unknown') as SupportedLanguage;
 
+  // ── 6. Cap the stored artifact's size ─────────────────────────────────────
+  // Every scalar/derived stat above (totalFunctions, health, deadCodeRatio,
+  // etc.) is already computed from the complete, uncapped data - only the
+  // large per-function/per-edge detail arrays below are bounded, so a
+  // Linux-kernel-scale result (500k+ functions) still produces a boundedly-
+  // sized, storable, renderable artifact instead of growing without limit.
+  // See ResultSizeCapper's doc comment for why this lives here rather than
+  // relying on a storage provider's size limit alone.
+  const cappedCallGraph = capCallGraph(callGraph);
+  const cappedComplexity = capComplexityDetail(complexity);
+  const cappedDeadCode = capDeadCode(deadCode);
+  const detailTruncated = cappedCallGraph.truncated || cappedComplexity.truncated || cappedDeadCode.truncated;
+
   return {
     rootDir,
     health,
-    callGraph,
-    deadCode,
+    callGraph: cappedCallGraph.value,
+    deadCode: cappedDeadCode.value,
     entryPoints,
-    complexity,
+    complexity: cappedComplexity.value,
+    testRisk,
     onboarding,
     dependencyHygiene,
     changeImpactGraph,
     gitHistory,
     securityRisk,
+    gitHistorySecrets,
+    declaredDependencies,
+    dependencyVulnerabilities: null,
     languageBreakdown,
     totalFunctions,
     totalFiles,
@@ -192,27 +226,33 @@ export async function analyzeRepo(
     oversizedFileRatio,
     primaryLanguage,
     truncated,
+    detailTruncated,
     analyzedAt: new Date().toISOString(),
   };
 }
 
 function buildEmptyAnalysis(rootDir: string, truncated = false): RepoAnalysis {
   const health = calculateHealthScore({
-    deadCodeRatio: 0, avgComplexity: 1, maxComplexity: 1,
+    deadCodeRatio: 0, avgComplexity: 1, highComplexityRatio: 0,
     testFileRatio: 0, duplicationRatio: 0, oversizedFileRatio: 0,
   });
   return {
     rootDir, health, callGraph: { nodes: [], edges: [] }, deadCode: [],
-    entryPoints: [], complexity: { avgComplexity: 1, maxComplexity: 1, files: [], mostComplex: [] },
+    entryPoints: [], complexity: { avgComplexity: 1, maxComplexity: 1, highComplexityRatio: 0, files: [], mostComplex: [] },
+    testRisk: { hotspots: [], untestedFunctionCount: 0, testableFunctionCount: 0, untestedRatio: 0, hasChurnData: false },
     onboarding: { stops: [], summary: 'No files were found to analyze.' },
     dependencyHygiene: { undeclaredImports: [] },
     changeImpactGraph: {},
     gitHistory: null,
     securityRisk: { findings: [], highCount: 0, mediumCount: 0, lowCount: 0 },
+    gitHistorySecrets: null,
+    declaredDependencies: [],
+    dependencyVulnerabilities: null,
     languageBreakdown: {}, totalFunctions: 0, totalFiles: 0, totalLines: 0,
     avgComplexity: 1, maxComplexity: 1, deadCodeRatio: 0, testFileRatio: 0,
     duplicationRatio: 0, oversizedFileRatio: 0, primaryLanguage: 'unknown',
     truncated,
+    detailTruncated: false,
     analyzedAt: new Date().toISOString(),
   };
 }

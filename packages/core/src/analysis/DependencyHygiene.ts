@@ -5,6 +5,19 @@ import { isLocalAliasImport, type TsAliasSource } from '../utils/tsconfigUtils.j
 
 const BUILTIN_SET = new Set(builtinModules);
 
+/**
+ * Modules a specific host environment injects at runtime rather than
+ * something npm ever installs - `import * as vscode from 'vscode'` in a VS
+ * Code extension resolves to the running editor's own API surface, never a
+ * real package.json dependency, no matter how correct the extension's
+ * dependencies are. Confirmed as a real false positive on
+ * rust-lang/rust's bundled rust-analyzer VS Code extension
+ * (`src/tools/rust-analyzer/editors/code/src/*.ts`): every file importing
+ * `vscode` got flagged as an undeclared dependency, when declaring it would
+ * be wrong, not missing.
+ */
+const AMBIENT_MODULES = new Set(['vscode']);
+
 export interface UndeclaredImport {
   packageName: string;
   importedFrom: string[];
@@ -61,6 +74,22 @@ export function checkDependencyHygiene(
 
   const filesByPackage = new Map<string, Set<string>>();
   for (const file of fileAnalyses) {
+    // package.json is a JS/TS-ecosystem concept - every check below assumes
+    // an import `source` follows npm's specifier shape ("." for relative,
+    // "/" as the path separator, bare name = a package). Other languages'
+    // import syntax doesn't share that shape at all: confirmed directly on
+    // rust-lang/rust, where RustParser emits `::`-separated paths like
+    // "std::collections::HashMap" as the import source - with no npm-style
+    // separator to split on, the whole path becomes one "package name",
+    // and even genuine standard-library imports get flagged as
+    // "undeclared" since nothing here knows Rust's std lib isn't an npm
+    // package. Produced 15,886 meaningless findings on that repo alone.
+    // Every other supported language (Python, Go, Java, ...) has its own
+    // unrelated dependency-declaration mechanism (requirements.txt/go.mod/
+    // pom.xml/Cargo.toml) this function has no model of, so the same
+    // false-noise risk applies to all of them, not just Rust.
+    if (file.language !== 'javascript' && file.language !== 'typescript') continue;
+
     const nearest = nearestSourceFor(file.filePath, sourcesByDepth);
 
     for (const imp of file.imports) {
@@ -115,6 +144,6 @@ function packageNameFromSource(source: string): string | null {
   if (source.startsWith('node:')) return null; // explicit builtin protocol
   const base = source.startsWith('@') ? source.split('/').slice(0, 2).join('/') : (source.split('/')[0] ?? null);
   if (!base) return null;
-  if (BUILTIN_SET.has(base)) return null;
+  if (BUILTIN_SET.has(base) || AMBIENT_MODULES.has(base)) return null;
   return base;
 }

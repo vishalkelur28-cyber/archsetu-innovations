@@ -22,5 +22,8 @@ export default defineConfig({
   // esbuild leaves them as genuine external imports instead of inlining
   // them just because they're transitive dependencies of a noExternal
   // package.
-  external: ['fast-glob', 'ignore', 'simple-git'],
+  // yaml hit the exact same "Dynamic require... is not supported" failure
+  // fast-glob did above (its composer.js does a dynamic `require('process')`
+  // internally) - same fix, same reasoning.
+  external: ['fast-glob', 'ignore', 'simple-git', 'yaml'],
 });

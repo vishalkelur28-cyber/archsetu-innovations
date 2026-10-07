@@ -1,0 +1,76 @@
+# Network policy: deny everything, then allow only what the worker provably
+# needs.
+#
+# Kubernetes has no network isolation by default. Every pod can reach every
+# other pod in the cluster, and every external address, unless a
+# NetworkPolicy says otherwise. For a workload whose job is cloning and
+# parsing arbitrary third-party code, that default is the wrong way round.
+#
+# Written default-deny-then-allow rather than as a list of blocks, for the
+# same reason migration 038 enables RLS with no policies: a rule that
+# enumerates what is forbidden is only as complete as the author's
+# imagination, while a rule that enumerates what is permitted fails closed.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: archsetu
+spec:
+  # Empty selector = every pod in the namespace.
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  # No ingress or egress rules at all: nothing in, nothing out. Everything
+  # below re-opens a specific path.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-egress
+  namespace: archsetu
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: archsetu-worker
+  policyTypes: [Egress]
+  egress:
+    # DNS. Without this nothing else works - every rule below is expressed
+    # against hostnames the pod cannot resolve.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Outbound HTTPS to the internet: github.com for clones, the GitHub API,
+    # Supabase, and S3 for analysis results.
+    #
+    # The `except` blocks are the important part and the reason this is not
+    # just `to: 0.0.0.0/0`. They carve the private ranges back out, which
+    # blocks the pod from reaching anything inside the cluster network or the
+    # cloud metadata service at 169.254.169.254 - the standard SSRF target for
+    # stealing node IAM credentials. A process that parses untrusted code
+    # should be able to reach GitHub and nothing on the inside.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16 # link-local, includes the metadata endpoint
+      ports:
+        - protocol: TCP
+          port: 443
+# No ingress rule anywhere for the worker.
+#
+# Nothing calls it - it pulls jobs from a queue. The HTTP listener on 8080
+# exists only so the kubelet can probe it, and probes come from the node
+# rather than through the pod network, so they are unaffected by this policy.

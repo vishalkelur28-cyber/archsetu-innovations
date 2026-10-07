@@ -2,17 +2,32 @@ import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 
+// Every pattern below is anchored on `^` (line start via the `m` flag), but
+// real Rust is almost never actually at column 0 - `mod tests { ... }` (and
+// nested `mod` blocks generally, a very standard way to organize a Rust
+// file) indents everything inside it, and impl-block methods are always
+// indented too. `^` alone requires the very first character on the line to
+// be the pattern's own first literal ("pub"/"fn"/"struct"/"impl"/"use"),
+// which an indented line never satisfies - confirmed directly: a plain
+// `fn bar(&self)` inside `impl Foo { ... }` parsed to zero functions found,
+// and a `mod tests { struct Fixture { .. } impl Fixture { fn new() {..} } }`
+// block parsed to zero functions, zero structs, and zero imports, all of
+// it invisible to every downstream pass (dead-code, call graph, complexity)
+// - not a narrow edge case but the common case for real, idiomatic Rust.
+// `[ \t]*` after `^` admits any amount of leading indentation while still
+// matching genuinely top-level (column-0) items exactly as before.
+
 /** fn name<generics>(params) -> ReturnType { */
-const FUNC_DEF = /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)(?:<[^>]*>)?\s*\(([^)]*)\)/gm;
+const FUNC_DEF = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)(?:<[^>]*>)?\s*\(([^)]*)\)/gm;
 
 /** struct Name */
-const STRUCT_DEF = /^(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)/gm;
+const STRUCT_DEF = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)/gm;
 
 /** impl Name */
-const IMPL_DEF = /^impl(?:<[^>]+>)?\s+(?:[\w:]+\s+for\s+)?(\w+)/gm;
+const IMPL_DEF = /^[ \t]*impl(?:<[^>]+>)?\s+(?:[\w:]+\s+for\s+)?(\w+)/gm;
 
 /** use crate::module::Item; */
-const USE_STMT = /^use\s+([\w:{}*, ]+);/gm;
+const USE_STMT = /^[ \t]*use\s+([\w:{}*, ]+);/gm;
 
 export const RustParser: LanguageParser = {
   language: 'rust',

@@ -110,8 +110,38 @@ export interface FileComplexity {
 export interface ComplexityReport {
   avgComplexity: number;
   maxComplexity: number;
+  /** Fraction (0-1) of all functions at "critical" complexity (>20) - see
+   * HealthScorer's highComplexityRatio doc comment for why this, not
+   * maxComplexity, feeds the health score's complexity sub-score. */
+  highComplexityRatio: number;
   files: FileComplexity[];
   mostComplex: FunctionComplexity[];
+}
+
+// ─── Test Risk ────────────────────────────────────────────────────────────────
+// See TestRiskAnalyzer.ts for the full methodology - static reachability from
+// test-file functions through the same call graph dead-code detection already
+// builds, not measured line/branch coverage from an actual test run.
+
+export interface TestRiskHotspot {
+  functionName: string;
+  filePath: string;
+  startLine: number;
+  complexity: number;
+  /** null when git history wasn't available for this analysis (e.g. a shallow clone). */
+  churnCount: number | null;
+  reason: string;
+}
+
+export interface TestRiskResult {
+  /** Ranked highest-risk first, capped - see TestRiskAnalyzer's MAX_HOTSPOTS. */
+  hotspots: TestRiskHotspot[];
+  /** Non-test, non-dead functions with no static call-graph path from any test file. */
+  untestedFunctionCount: number;
+  /** Non-test, non-dead functions total - the denominator untestedRatio is computed against. */
+  testableFunctionCount: number;
+  untestedRatio: number;
+  hasChurnData: boolean;
 }
 
 // ─── Blast Radius ─────────────────────────────────────────────────────────────
@@ -259,7 +289,12 @@ export interface GitHistoryResult {
 export type SecurityFindingCategory =
   | 'hardcoded-secret'
   | 'dynamic-code-execution'
-  | 'sql-injection-risk';
+  | 'sql-injection-risk'
+  | 'insecure-transport'
+  | 'weak-cryptography'
+  | 'container-misconfiguration'
+  | 'cloud-exposure'
+  | 'ci-workflow-injection';
 
 export type SecuritySeverity = 'high' | 'medium' | 'low';
 
@@ -281,6 +316,78 @@ export interface SecurityRiskResult {
   lowCount: number;
 }
 
+// ─── Git History Secret Scan ───────────────────────────────────────────────────
+// A secret committed once and later deleted is still readable in git history
+// forever - the current-tree scan above can never see it, since it only reads
+// files as they exist right now. Same bounded window as GitHistoryResult
+// (GIT_HISTORY_MAX_COMMITS), same reasoning: recent activity, not full
+// project archaeology.
+
+export interface HistoricalSecretFinding {
+  /** Always 'hardcoded-secret' today - kept as SecurityFindingCategory rather than a narrower literal so this can share types/UI with SecurityFinding if more historical categories are added later. */
+  category: SecurityFindingCategory;
+  severity: SecuritySeverity;
+  filePath: string;
+  /** Full commit hash the secret was introduced in (an added line in that commit's diff). */
+  commitHash: string;
+  /** ISO 8601 - when the introducing commit was made. */
+  commitDate: string;
+  description: string;
+  /** Matched line, trimmed - secret VALUES are masked in place, same redaction as SecurityFinding.lineText. */
+  lineText: string;
+}
+
+export interface GitHistorySecretScanResult {
+  findings: HistoricalSecretFinding[];
+  /** How many commits were actually walked - always ≤ the configured bound. */
+  commitsScanned: number;
+}
+
+// ─── Dependency Vulnerabilities ────────────────────────────────────────────────
+// Two-phase, unlike every other field on RepoAnalysis: `declaredDependencies`
+// is pure manifest parsing (see DependencyVersionExtractor.ts) and IS
+// computed inside analyzeRepo() like everything else. `dependencyVulnerabilities`
+// requires an actual vulnerability-database network call (OSV.dev), which
+// this package's public contract explicitly forbids - analyzeRepo() always
+// leaves it null. The worker and CLI, which already talk to the network for
+// other reasons, populate it afterward and attach it to this same object
+// before storing/uploading the result. See apps/web/src/lib/osv.ts.
+
+/** See DependencyVersionExtractor.ts for how this is parsed out of each ecosystem's manifest format. */
+export interface DeclaredDependency {
+  name: string;
+  /** Best-effort version, not necessarily the exact installed one for npm - see DependencyVersionExtractor's normalizeNpmVersionRange doc comment. Always exact for PyPI/Go. */
+  version: string;
+  ecosystem: 'npm' | 'PyPI' | 'Go';
+  /** Relative path to the manifest file this was declared in, for display context. */
+  manifestPath: string;
+}
+
+export type DependencySeverity = 'critical' | 'high' | 'medium' | 'low' | 'unknown';
+
+export interface DependencyVulnerability {
+  packageName: string;
+  /** The declared version that was checked - see DeclaredDependency's own caveat about npm ranges. */
+  version: string;
+  ecosystem: 'npm' | 'PyPI' | 'Go';
+  /** OSV/GHSA/CVE identifier, e.g. "GHSA-xxxx-xxxx-xxxx" or "CVE-2023-12345". */
+  vulnId: string;
+  summary: string;
+  severity: DependencySeverity;
+  /** The version that fixes this, if OSV's data includes one. */
+  fixedVersion: string | null;
+  referenceUrl: string | null;
+}
+
+export interface DependencyVulnScanResult {
+  vulnerabilities: DependencyVulnerability[];
+  dependenciesScanned: number;
+  criticalCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+}
+
 // ─── Full Repo Analysis ───────────────────────────────────────────────────────
 
 export interface LanguageBreakdown {
@@ -294,6 +401,8 @@ export interface RepoAnalysis {
   deadCode: DeadCodeResult[];
   entryPoints: EntryPoint[];
   complexity: ComplexityReport;
+  /** Complex/frequently-changed functions with no static call-graph path from any test file - see TestRiskAnalyzer.ts. */
+  testRisk: TestRiskResult;
   onboarding: OnboardingGuide;
   dependencyHygiene: DependencyHygieneResult;
   changeImpactGraph: ChangeImpactGraph;
@@ -306,12 +415,43 @@ export interface RepoAnalysis {
   /** Regex-based security heuristics - hardcoded secrets, unsafe dynamic execution, string-built SQL. */
   securityRisk: SecurityRiskResult;
   /**
+   * Secrets found in historical commit diffs, not the current checked-out
+   * tree - null under the exact same conditions as gitHistory (not a git
+   * repo, no commits, or the git subprocess timed out/failed). A finding
+   * here does NOT imply the same secret is still present in the current
+   * code (see securityRisk for that) - it means this value was committed at
+   * some point and is permanently recoverable from history regardless of
+   * whether it was later deleted, so it should be treated as compromised
+   * and rotated either way.
+   */
+  gitHistorySecrets: GitHistorySecretScanResult | null;
+  /** Pure manifest parsing (package.json/requirements.txt/go.mod) - see DependencyVersionExtractor.ts. */
+  declaredDependencies: DeclaredDependency[];
+  /**
+   * Always null immediately after analyzeRepo() returns - this package never
+   * makes network calls, and checking a dependency against a vulnerability
+   * database requires one. The worker/CLI populate this after the fact; a
+   * report showing this as null after 'complete' means the OSV lookup itself
+   * failed or timed out, not that the repo has zero vulnerable dependencies -
+   * see DependencyVulnScanResult's own doc comment.
+   */
+  dependencyVulnerabilities: DependencyVulnScanResult | null;
+  /**
    * True when the repo had more eligible source files than walkRepo's cap
    * (10,000 by default) and traversal was cut short - every metric below is
    * computed from a partial file set, not the full repo. Surface this to
    * the user rather than presenting a partial analysis as complete.
    */
   truncated: boolean;
+  /**
+   * True when one or more of the large per-function/per-edge detail arrays
+   * (callGraph, complexity.files[].functions, deadCode) were capped for
+   * storage/render-size reasons - unlike `truncated` above, every scalar
+   * stat (totalFunctions, health, deadCodeRatio, etc.) is still computed
+   * from the complete, uncapped analysis; only these detail views are
+   * bounded. See ResultSizeCapper in packages/core for the caps themselves.
+   */
+  detailTruncated: boolean;
   languageBreakdown: LanguageBreakdown;
   totalFunctions: number;
   totalFiles: number;

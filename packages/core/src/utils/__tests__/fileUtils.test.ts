@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { walkRepo } from '../fileUtils.js';
+import { walkRepo, isTestFile } from '../fileUtils.js';
 
 const tempDirs: string[] = [];
 
@@ -73,5 +73,48 @@ describe('walkRepo', () => {
 
     expect(result.truncated).toBe(false);
     expect(result.files).toHaveLength(0);
+  });
+
+  it('walks .github/workflows/*.yml despite the blanket dot-directory skip, since it holds real security-relevant config', async () => {
+    // Regression test: InfrastructureConfigAnalyzer's CI-workflow-injection
+    // scan silently found zero files until this exemption was added -
+    // walkRepo was treating .github the same as .git/.vscode/caches and
+    // never handing it a single file.
+    const dir = await makeTempRepo({
+      '.github/workflows/ci.yml': 'on: push\njobs:\n  build:\n    steps:\n      - run: echo hi\n',
+      '.git/config': '[core]\n',
+      '.vscode/settings.json': '{}',
+    });
+
+    const result = await walkRepo(dir);
+
+    expect(result.files.map((f) => f.relativePath)).toContain('.github/workflows/ci.yml');
+    expect(result.files.some((f) => f.relativePath.startsWith('.git/'))).toBe(false);
+    expect(result.files.some((f) => f.relativePath.startsWith('.vscode/'))).toBe(false);
+  });
+});
+
+describe('isTestFile', () => {
+  it('recognizes common JS/TS/Go/Rust conventions', () => {
+    expect(isTestFile('src/foo.test.ts')).toBe(true);
+    expect(isTestFile('src/foo.spec.ts')).toBe(true);
+    expect(isTestFile('src/__tests__/foo.ts')).toBe(true);
+    expect(isTestFile('pkg/foo_test.go')).toBe(true);
+    expect(isTestFile('src/foo_test.rs')).toBe(true);
+    expect(isTestFile('src/foo.ts')).toBe(false);
+  });
+
+  it('recognizes Linux-kernel-style conventions (selftests, KUnit) that path/name checks alone miss', () => {
+    // Confirmed gap on torvalds/linux: tools/testing/selftests/ files rarely
+    // have "test" in their own filename, and neither "/testing/" nor
+    // "/selftests/" matched the old "/test/" / "/tests/" exact-segment checks.
+    expect(isTestFile('tools/testing/selftests/net/tcp_mmap.c')).toBe(true);
+    expect(isTestFile('lib/kunit/kunit-test.c')).toBe(true);
+    expect(isTestFile('mm/kfence/kfence_test.c')).toBe(true);
+    expect(isTestFile('drivers/net/some_driver.c')).toBe(false);
+  });
+
+  it('normalizes Windows-style backslashes before matching', () => {
+    expect(isTestFile('tools\\testing\\selftests\\net\\tcp_mmap.c')).toBe(true);
   });
 });

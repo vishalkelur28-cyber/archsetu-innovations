@@ -90,6 +90,85 @@ describe('isFrameworkReservedExport - Next.js App Router conventions', () => {
   });
 });
 
+/**
+ * Regression tests for a real false positive found via the anomaly-sweep
+ * script (apps/web/scripts/anomaly-sweep.mjs) flagging an ordinary
+ * production analysis (whoiskatrin/sql-translator) as a statistical dead-
+ * code-ratio outlier - not a repo anyone chose to test by hand. Its
+ * pages/_app.tsx and pages/index.tsx default exports were flagged dead:
+ * real Next.js Pages Router files, called implicitly by the framework's
+ * router, but with zero conventions registered for that router at all
+ * (only the newer App Router was covered).
+ */
+describe('isFrameworkReservedExport - Next.js Pages Router conventions', () => {
+  it('reserves the default export in pages/_app.tsx, pages/_document.tsx, and pages/_error.tsx', () => {
+    expect(isFrameworkReservedExport('pages/_app.tsx', 'MyApp', true)).toBe(true);
+    expect(isFrameworkReservedExport('pages/_document.tsx', 'MyDocument', true)).toBe(true);
+    expect(isFrameworkReservedExport('pages/_error.tsx', 'ErrorPage', true)).toBe(true);
+  });
+
+  it('reserves the default export of any page file, including nested dynamic routes', () => {
+    expect(isFrameworkReservedExport('pages/index.tsx', 'Home', true)).toBe(true);
+    expect(isFrameworkReservedExport('pages/about.tsx', 'About', true)).toBe(true);
+    expect(isFrameworkReservedExport('pages/blog/[slug].tsx', 'BlogPost', true)).toBe(true);
+  });
+
+  it('reserves the default export of an API route, and its config export', () => {
+    expect(isFrameworkReservedExport('pages/api/users.ts', 'handler', true)).toBe(true);
+    expect(isFrameworkReservedExport('pages/api/users.ts', 'config', false)).toBe(true);
+  });
+
+  it('reserves getInitialProps anywhere under pages/', () => {
+    expect(isFrameworkReservedExport('pages/index.tsx', 'getInitialProps', false)).toBe(true);
+    expect(isFrameworkReservedExport('pages/_app.tsx', 'getInitialProps', false)).toBe(true);
+  });
+
+  it('does not reserve an arbitrary named export in a page file', () => {
+    expect(isFrameworkReservedExport('pages/index.tsx', 'someHelper', false)).toBe(false);
+  });
+
+  it('does not reserve exports in a file outside pages/, even with a similar name', () => {
+    // "pages-legacy" is not the literal "pages/" segment this convention
+    // matches on - same precision the App Router page.tsx pattern already
+    // relies on (matched by path shape, not restricted to a root directory).
+    expect(isFrameworkReservedExport('src/pages-legacy/index.tsx', 'Home', true)).toBe(false);
+  });
+});
+
+describe('DeadCodeFinder - Next.js Pages Router false positives', () => {
+  it('does not flag the default export of pages/_app.tsx as dead code', () => {
+    const source = `
+      export default function MyApp({ Component, pageProps }) {
+        return Component(pageProps);
+      }
+    `;
+    const dead = findDeadCode([parseTsx(source, '/repo/pages/_app.tsx')]);
+    expect(dead.map((d) => d.function.name)).not.toContain('MyApp');
+  });
+
+  it('does not flag the default export of a top-level page as dead code', () => {
+    const source = `
+      export default function Home() {
+        return null;
+      }
+    `;
+    const dead = findDeadCode([parseTsx(source, '/repo/pages/index.tsx')]);
+    expect(dead.map((d) => d.function.name)).not.toContain('Home');
+  });
+
+  it('still flags a genuinely unused function in a page file as dead (regression guard)', () => {
+    const source = `
+      function unusedHelper() { return 1; }
+      export default function Home() {
+        return null;
+      }
+    `;
+    const dead = findDeadCode([parseTsx(source, '/repo/pages/index.tsx')]);
+    expect(dead.map((d) => d.function.name)).toContain('unusedHelper');
+    expect(dead.map((d) => d.function.name)).not.toContain('Home');
+  });
+});
+
 describe('DeadCodeFinder - Next.js App Router false positives', () => {
   it('does not flag generateMetadata as dead code in a page.tsx file', () => {
     const source = `

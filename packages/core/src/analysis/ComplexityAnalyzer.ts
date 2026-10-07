@@ -62,6 +62,13 @@ export function analyzeComplexity(fileAnalyses: FileAnalysis[]): ComplexityRepor
       : 1;
   const maxComplexity = allComplexities.length > 0 ? maxOf(allComplexities) : 1;
 
+  // Computed from the complete, uncapped allFunctions list (before
+  // ResultSizeCapper ever runs) - see HealthScorer's highComplexityRatio
+  // doc comment for why this ratio, not the raw maxComplexity above, feeds
+  // the health score.
+  const criticalCount = allFunctions.reduce((n, f) => n + (f.level === 'critical' ? 1 : 0), 0);
+  const highComplexityRatio = allFunctions.length > 0 ? criticalCount / allFunctions.length : 0;
+
   const mostComplex = [...allFunctions]
     .sort((a, b) => b.complexity - a.complexity)
     .slice(0, 20);
@@ -69,6 +76,7 @@ export function analyzeComplexity(fileAnalyses: FileAnalysis[]): ComplexityRepor
   return {
     avgComplexity: Math.round(avgComplexity * 100) / 100,
     maxComplexity,
+    highComplexityRatio,
     files,
     mostComplex,
   };

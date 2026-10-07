@@ -38,15 +38,18 @@
   "dependencies": {
     "fast-glob": "^3.3.2",
     "ignore": "^5.3.1",
-    "simple-git": "^3.25.0"
+    "simple-git": "^4.0.2",
+    "yaml": "^2.5.1"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "tsup": "^8.1.0",
     "typescript": "^5.5.2",
-    "vitest": "^1.6.0"
+    "vitest": "^3.2.7"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   }

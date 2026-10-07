@@ -86,7 +86,15 @@ async function walkDir(
     const fullPath = path.join(currentDir, entry.name);
 
     if (entry.isDirectory()) {
-      if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+      // Dot-directories are skipped as a blanket rule (.git, .vscode, .idea,
+      // caches, etc.) - except .github, which is where every GitHub Actions
+      // workflow lives (.github/workflows/*.yml) and is exactly the kind of
+      // meaningful, security-relevant config this walker exists to surface,
+      // not tooling noise to hide. Confirmed as a real gap: the CI-workflow
+      // injection scan in InfrastructureConfigAnalyzer.ts never saw a single
+      // file until this exemption was added, since walkRepo never even
+      // handed it one.
+      if (IGNORED_DIRS.has(entry.name) || (entry.name.startsWith('.') && entry.name !== '.github')) continue;
       const nestedHitCap = await walkDir(fullPath, rootDir, maxSize, maxFiles, results);
       if (nestedHitCap) hitCap = true;
     } else if (entry.isFile()) {
@@ -139,7 +147,79 @@ export function isTestFile(filePath: string): boolean {
     lower.includes('.spec.') ||
     lower.includes('_test.') ||
     lower.includes('_spec.') ||
+    lower.includes('-test.') ||
     lower.endsWith('_test.go') ||
-    lower.endsWith('test.rs')
+    lower.endsWith('test.rs') ||
+    // Kernel/systems-project conventions the patterns above miss entirely:
+    // Linux's own self-test suite lives under tools/testing/selftests/ (no
+    // "test" in most individual filenames, just the directory), and its
+    // KUnit unit-test framework lives under .../kunit/ dirs - confirmed
+    // directly against torvalds/linux, where testFileRatio read as 1.4%
+    // (misleadingly low) before this because neither convention matched
+    // "/test/" or "/tests/" as an exact path segment.
+    lower.includes('/testing/') ||
+    lower.includes('/selftests/') ||
+    lower.includes('/kunit/') ||
+    // Fixture/test-data directory conventions, distinct from the "test
+    // runner" conventions above - a file matching one of these holds sample
+    // input data for tests (often deliberately including "bad" values like
+    // expired certificates or dummy secrets to verify parsing/handling
+    // logic), not test code itself. Confirmed against authelia/authelia,
+    // where test_resources/ config files with intentionally-fake private
+    // keys and secrets were the majority of SecurityRiskAnalyzer's
+    // hardcoded-secret false positives on that repo.
+    lower.includes('/test_resources/') ||
+    lower.includes('/testdata/') ||
+    lower.includes('/fixtures/') ||
+    // "unittest" as a whole directory segment (distinct from Python's
+    // `unittest` module name, which never appears bounded by slashes on
+    // both sides like this) - confirmed against go-gitea/gitea, whose test
+    // helper package lives at models/unittest/ (fixture loading, DB reset
+    // between tests) and was still producing sql-injection-risk false
+    // positives after the /test/ and /tests/ checks above, since neither
+    // matches "unittest" as a distinct word.
+    // Documentation-example directory convention, not "test" by name but
+    // the same underlying reasoning: a runnable tutorial example's values
+    // are deliberately illustrative, not real. Confirmed against
+    // tiangolo/fastapi, whose docs_src/ directory holds the actual runnable
+    // code shown in tutorial pages - "SECRET_KEY = ..." there is FastAPI's
+    // own well-known, publicly-documented example key, not a leak.
+    // Deliberately just this one specific, narrow name rather than a
+    // broader "docs/" or "tutorial/" pattern - a real docs/ folder can and
+    // sometimes does contain a genuinely leaked secret (an ops runbook, an
+    // internal API guide), so blanket-skipping it would risk hiding a real
+    // finding, not just a false one.
+    lower.includes('/docs_src/') ||
+    lower.includes('/unittest/')
+  );
+}
+
+/**
+ * Returns true if a file path looks like a database migration script
+ * (TypeORM/Knex/Rails/Django/Alembic/Flyway conventions). Migration files
+ * build DDL/DML by interpolating table and column names into query strings -
+ * standard SQL has no way to bind an identifier as a parameter, so this is
+ * simply how migrations are written, not a sign of unparameterized user
+ * input. Confirmed against n8n-io/n8n, where migration files accounted for
+ * the large majority of sql-injection-risk findings (table-prefix
+ * interpolation like `INSERT INTO "${tablePrefix}tag_entity"`), none of them
+ * reachable by request-time user input.
+ */
+export function isMigrationFile(filePath: string): boolean {
+  const lower = filePath.toLowerCase().replace(/\\/g, '/');
+  return (
+    lower.includes('/migrations/') ||
+    lower.includes('/migration/') ||
+    lower.includes('/db/migrate/') ||
+    lower.includes('/alembic/versions/') ||
+    // A directory segment that merely *contains* "migration" as a substring
+    // rather than being exactly "migration"/"migrations" - confirmed against
+    // go-gitea/gitea, whose migration package is a single compound word,
+    // modelmigration/ (e.g. modelmigration/v1_15/v182.go), which the exact-
+    // segment checks above never match since there's no literal "/" directly
+    // before "migration" in that path. Bounded to a whole path segment via
+    // the surrounding slashes, so this doesn't also match an unrelated
+    // ordinary file that merely has "migration" somewhere in its name.
+    /\/[a-z0-9_]*migrations?[a-z0-9_]*\//.test(lower)
   );
 }

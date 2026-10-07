@@ -7,11 +7,13 @@
  *   archsetu analyze --json ./path/to/repo
  *   archsetu health ./path/to/repo
  *   archsetu dead-code ./path/to/repo
+ *   archsetu install-hook --min-score 60
+ *   archsetu uninstall-hook
  */
 
 import { Command } from 'commander';
 import path from 'path';
-import zlib from 'zlib';
+import fs from 'fs';
 import chalk from 'chalk';
 import ora from 'ora';
 import {
@@ -19,7 +21,10 @@ import {
   calculateHealthScore,
   findDeadCode,
   walkRepo,
+  gzipJsonStringify,
+  writeJsonToStdout,
 } from '@archsetu/core';
+import { checkDependencyVulnerabilities } from './osv.js';
 
 // The exact hostname that actually serves 200s - archsetu.com (no www) is a
 // 308 redirect to this at the Vercel domain level. Deliberately NOT using
@@ -73,12 +78,12 @@ program
       spinner?.succeed(`Analysis complete in ${(result as { analyzedAt?: string }).analyzedAt ?? 'N/A'}`);
 
       if (opts.json) {
-        process.stdout.write(JSON.stringify(result, null, 2));
+        await writeJsonToStdout(result);
         return;
       }
 
       // Pretty print
-      const { health, totalFunctions, deadCode, entryPoints, totalFiles, totalLines } = result;
+      const { health, totalFunctions, deadCode, entryPoints, totalFiles, totalLines, testRisk } = result;
       const scoreColor =
         health.score >= 80 ? chalk.green :
         health.score >= 60 ? chalk.yellow :
@@ -109,6 +114,19 @@ program
         });
         if (deadCode.length > 10) {
           console.log(chalk.dim(`  ... and ${deadCode.length - 10} more`));
+        }
+      }
+
+      if (testRisk.hotspots.length > 0) {
+        console.log('\n' + chalk.bold(`── Test Risk Hotspots (${testRisk.hotspots.length}) ──`));
+        console.log(chalk.dim('  Complex code with no static evidence any test in this repo exercises it:'));
+        testRisk.hotspots.slice(0, 10).forEach((h) => {
+          const shortPath = h.filePath.split(/[/\\]/).slice(-2).join('/');
+          const churn = h.churnCount ? chalk.dim(` (${h.churnCount} commits)`) : '';
+          console.log(`  ${chalk.dim(shortPath)}:${h.startLine} ${h.functionName} ${chalk.yellow(`complexity ${h.complexity}`)}${churn}`);
+        });
+        if (testRisk.hotspots.length > 10) {
+          console.log(chalk.dim(`  ... and ${testRisk.hotspots.length - 10} more`));
         }
       }
 
@@ -148,7 +166,7 @@ program
     const dead = findDeadCode(analyses as Parameters<typeof findDeadCode>[0]);
 
     if (opts.json) {
-      process.stdout.write(JSON.stringify(dead, null, 2));
+      await writeJsonToStdout(dead);
       return;
     }
 
@@ -204,6 +222,16 @@ program
     const rootDir = path.resolve(dir ?? '.');
     const analyzeSpinner = ora(`Analyzing ${rootDir}...`).start();
     let result: Awaited<ReturnType<typeof analyzeRepo>>;
+    // The hosted worker times its own clone+analyze and stores it as
+    // duration_ms on the analyses row (see analysis.worker.mts) - this path
+    // runs entirely outside that worker, so without measuring it here
+    // ourselves, every submit-path analysis (which includes every
+    // auto-routed-to-Actions large repo, not just manual CLI runs) would
+    // permanently show no duration on its report, even though the work
+    // obviously took real time. Measuring here, not derived from the submit
+    // API calls' own timestamps below, since those only span a few fast HTTP
+    // round trips long after the actual analysis already finished.
+    const analyzeStartedAt = Date.now();
     try {
       result = await analyzeRepo(rootDir, { maxFiles: opts.maxFiles });
       if (result.truncated) {
@@ -218,6 +246,28 @@ program
       analyzeSpinner.fail('Analysis failed');
       console.error(chalk.red((err as Error).message));
       process.exit(1);
+    }
+
+    const analyzeDurationMs = Date.now() - analyzeStartedAt;
+
+    // Same reasoning as analysis.worker.mts's own call site: analyzeRepo()
+    // already computed result.declaredDependencies (pure manifest parsing),
+    // but the actual vulnerability-database lookup requires a network call
+    // packages/core is contractually forbidden from making - this CLI, like
+    // the worker, is one of the two places allowed to make it. Never throws;
+    // a slow/unreachable OSV.dev just leaves this null, same degrade-gracefully
+    // contract as everything else in this pipeline.
+    if (result.declaredDependencies.length > 0) {
+      const depSpinner = ora(`Checking ${result.declaredDependencies.length} dependencies for known vulnerabilities...`).start();
+      result.dependencyVulnerabilities = await checkDependencyVulnerabilities(result.declaredDependencies);
+      const vulnCount = result.dependencyVulnerabilities?.vulnerabilities.length ?? 0;
+      if (vulnCount > 0) {
+        depSpinner.warn(`Found ${vulnCount} known vulnerabilit${vulnCount === 1 ? 'y' : 'ies'} in dependencies`);
+      } else if (result.dependencyVulnerabilities) {
+        depSpinner.succeed('No known vulnerabilities found in dependencies');
+      } else {
+        depSpinner.warn('Dependency vulnerability check unavailable (OSV.dev unreachable)');
+      }
     }
 
     const uploadSpinner = ora(`Uploading results for ${owner}/${repo}...`).start();
@@ -247,6 +297,19 @@ program
           entryPointCount: result.entryPoints.length,
           languageBreakdown: result.languageBreakdown,
           primaryLanguage: result.primaryLanguage,
+          durationMs: analyzeDurationMs,
+          // Counts only, same reasoning as everything else on this step-1
+          // summary - full finding detail already travels in the step-2
+          // Storage upload of the complete `result` object below. Optional
+          // on the server side so older CLI versions don't get rejected.
+          securityHighCount: result.securityRisk.highCount,
+          securityMediumCount: result.securityRisk.mediumCount,
+          securityLowCount: result.securityRisk.lowCount,
+          gitHistorySecretCount: result.gitHistorySecrets?.findings.length ?? null,
+          dependencyVulnCriticalCount: result.dependencyVulnerabilities?.criticalCount ?? null,
+          dependencyVulnHighCount: result.dependencyVulnerabilities?.highCount ?? null,
+          dependencyVulnMediumCount: result.dependencyVulnerabilities?.mediumCount ?? null,
+          dependencyVulnLowCount: result.dependencyVulnerabilities?.lowCount ?? null,
         }),
       });
       const initData = await parseJsonResponse<{
@@ -262,7 +325,7 @@ program
       }
 
       // ── Step 2: PUT the full compressed result straight to Storage ──────
-      const compressed = zlib.gzipSync(JSON.stringify(result));
+      const compressed = await gzipJsonStringify(result);
       const uploadRes = await fetch(initData.uploadUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/gzip' },
@@ -270,7 +333,15 @@ program
       });
       if (!uploadRes.ok) {
         uploadSpinner.fail('Upload failed');
-        console.error(chalk.red(`Storage upload failed: HTTP ${uploadRes.status}`));
+        // A bare status code alone (the previous behavior here) isn't
+        // enough to tell "too large for the bucket's size limit" apart from
+        // "expired signed URL" apart from any other Storage-side rejection -
+        // confirmed the hard way when an HTTP 400 with no body context took
+        // a full extra round trip to diagnose. Storage error responses are
+        // small JSON/text, safe to read and show directly.
+        const bodyText = await uploadRes.text().catch(() => '');
+        const detail = bodyText.slice(0, 500).trim();
+        console.error(chalk.red(`Storage upload failed: HTTP ${uploadRes.status} (${(compressed.length / 1024 / 1024).toFixed(1)}MB payload)${detail ? ` - ${detail}` : ''}`));
         process.exit(1);
       }
 
@@ -302,6 +373,168 @@ program
       const cause = (err as { cause?: unknown }).cause;
       if (cause) console.error(chalk.dim(`Cause: ${cause instanceof Error ? cause.message : String(cause)}`));
       process.exit(1);
+    }
+  });
+
+// ─── install-hook / uninstall-hook ─────────────────────────────────────────────
+// A local git pre-commit gate, the same idea as the GitHub Action but for a
+// developer's own machine, before code ever reaches a PR. Deliberately
+// top-level command NAMES (not Commander's "hook install" space-separated
+// form, which actually parses the second word as a positional argument
+// placeholder, not a literal subcommand token) to avoid ambiguity.
+const HOOK_MARKER = '# archsetu-managed-hook - https://archsetu.com';
+
+function findGitDir(startDir: string): string | null {
+  let dir = path.resolve(startDir);
+  while (true) {
+    const gitPath = path.join(dir, '.git');
+    if (fs.existsSync(gitPath)) return gitPath;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function hookBody(minScore?: number): string {
+  const lines = [
+    'RESULT=$(archsetu health . 2>/dev/null)',
+    'SCORE=$(echo "$RESULT" | awk \'{print $1}\')',
+    'GRADE=$(echo "$RESULT" | awk \'{print $2}\')',
+    'echo "ArchSetu health: $SCORE/100 ($GRADE)"',
+  ];
+  if (minScore != null) {
+    lines.push(
+      `if [ -n "$SCORE" ] && [ "$SCORE" -lt ${minScore} ]; then`,
+      `  echo "Health score $SCORE is below the required minimum of ${minScore}. Commit blocked."`,
+      `  echo "Run 'git commit --no-verify' to bypass (not recommended)."`,
+      '  exit 1',
+      'fi',
+    );
+  }
+  return lines.join('\n');
+}
+
+program
+  .command('install-hook')
+  .description('Install a local pre-commit hook that runs ArchSetu health checks before each commit')
+  .option('--min-score <n>', 'Block the commit if the health score falls below this (0-100)', (v) => parseInt(v, 10))
+  .action((opts: { minScore?: number }) => {
+    const gitDir = findGitDir(process.cwd());
+    if (!gitDir) {
+      console.error(chalk.red('No .git directory found - run this from inside a git repository.'));
+      process.exit(1);
+    }
+    const hooksDir = path.join(gitDir, 'hooks');
+    if (!fs.existsSync(hooksDir)) fs.mkdirSync(hooksDir, { recursive: true });
+    const hookPath = path.join(hooksDir, 'pre-commit');
+
+    // Never silently overwrite a hook ArchSetu didn't install itself - a
+    // team's existing Husky/lint-staged setup living at this exact path is
+    // real, in-use configuration, not something to clobber without asking.
+    if (fs.existsSync(hookPath) && !fs.readFileSync(hookPath, 'utf8').includes(HOOK_MARKER)) {
+      console.error(chalk.red('A pre-commit hook already exists here and was not installed by ArchSetu - refusing to overwrite it.'));
+      console.error('Add this snippet to your existing hook instead:\n');
+      console.error(chalk.dim(hookBody(opts.minScore)));
+      process.exit(1);
+    }
+
+    fs.writeFileSync(hookPath, `#!/usr/bin/env sh\n${HOOK_MARKER}\n${hookBody(opts.minScore)}\n`, { mode: 0o755 });
+    fs.chmodSync(hookPath, 0o755);
+    console.log(chalk.green(`Installed pre-commit hook at ${hookPath}`));
+    console.log(
+      opts.minScore != null
+        ? `Commits will be blocked if the health score falls below ${opts.minScore}.`
+        : 'The hook will report the score on every commit but never block one (pass --min-score to change that).',
+    );
+  });
+
+program
+  .command('uninstall-hook')
+  .description('Remove the ArchSetu-managed pre-commit hook')
+  .action(() => {
+    const gitDir = findGitDir(process.cwd());
+    if (!gitDir) {
+      console.error(chalk.red('No .git directory found.'));
+      process.exit(1);
+    }
+    const hookPath = path.join(gitDir, 'hooks', 'pre-commit');
+    if (!fs.existsSync(hookPath) || !fs.readFileSync(hookPath, 'utf8').includes(HOOK_MARKER)) {
+      console.log('No ArchSetu-managed pre-commit hook found here.');
+      return;
+    }
+    fs.unlinkSync(hookPath);
+    console.log(chalk.green('Removed the ArchSetu pre-commit hook.'));
+  });
+
+// ─── init-ai-rules ──────────────────────────────────────────────────────────
+// A lot of code today is written by an AI coding assistant, not typed by
+// hand - Claude Code, Cursor, Copilot, and others each read their own
+// project-level instructions file. This gives that assistant explicit
+// awareness of ArchSetu's own deterministic checks, so the AI-era part of a
+// codebase gets held to the same real, evidence-based signal as everything
+// else, instead of ArchSetu only ever running after the fact.
+const AI_RULES_MARKER = '<!-- archsetu-managed-block -->';
+const AI_RULES_BLOCK = `${AI_RULES_MARKER}
+## ArchSetu health checks
+
+This project uses ArchSetu (archsetu.com) for deterministic, evidence-based code
+health analysis - no AI or guessing involved in these checks, only real,
+mechanically verified signal.
+
+- Before finishing a task, run \`archsetu health .\` (or \`npx @archsetuweb/cli health .\`
+  if not installed globally) and note the score.
+- Never leave newly-introduced dead code behind. If \`archsetu dead-code .\` reports a
+  function you just added as unreachable, either wire it up or remove it.
+- Before adding a new dependency, avoid anything typosquatted or confusable with an
+  internal package name.
+- If a pre-commit hook or CI check enforces a minimum ArchSetu score, treat a failing
+  score as a real signal to address, not something to bypass with --no-verify.
+<!-- /archsetu-managed-block -->`;
+
+interface AiAssistantTarget {
+  id: string;
+  label: string;
+  relativePath: string;
+}
+
+const AI_ASSISTANT_TARGETS: AiAssistantTarget[] = [
+  { id: 'claude', label: 'Claude Code', relativePath: 'CLAUDE.md' },
+  { id: 'cursor', label: 'Cursor', relativePath: '.cursorrules' },
+  { id: 'copilot', label: 'GitHub Copilot', relativePath: path.join('.github', 'copilot-instructions.md') },
+];
+
+program
+  .command('init-ai-rules')
+  .description('Add ArchSetu-awareness to your AI coding assistant\'s instructions file (Claude Code, Cursor, Copilot)')
+  .option('--assistant <name>', 'Only target one assistant: claude, cursor, or copilot (default: all)')
+  .action((opts: { assistant?: string }) => {
+    const requested = opts.assistant?.toLowerCase();
+    const targets = requested ? AI_ASSISTANT_TARGETS.filter((t) => t.id === requested) : AI_ASSISTANT_TARGETS;
+
+    if (targets.length === 0) {
+      console.error(chalk.red(`Unknown assistant "${opts.assistant}" - choose one of: ${AI_ASSISTANT_TARGETS.map((t) => t.id).join(', ')}`));
+      process.exit(1);
+    }
+
+    for (const target of targets) {
+      const fullPath = path.resolve(process.cwd(), target.relativePath);
+      const dir = path.dirname(fullPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      if (fs.existsSync(fullPath)) {
+        const existing = fs.readFileSync(fullPath, 'utf8');
+        if (existing.includes(AI_RULES_MARKER)) {
+          console.log(chalk.dim(`${target.label}: already has the ArchSetu block (${target.relativePath}), skipped.`));
+          continue;
+        }
+        // Append, never overwrite - these are files a team actively edits,
+        // and replacing the whole file would destroy real, existing content.
+        fs.writeFileSync(fullPath, `${existing.replace(/\s+$/, '')}\n\n${AI_RULES_BLOCK}\n`);
+        console.log(chalk.green(`${target.label}: appended the ArchSetu block to existing ${target.relativePath}`));
+      } else {
+        fs.writeFileSync(fullPath, `${AI_RULES_BLOCK}\n`);
+        console.log(chalk.green(`${target.label}: created ${target.relativePath}`));
+      }
     }
   });
 

@@ -1,0 +1,175 @@
+# The analysis worker, hardened.
+#
+# This is the same container that runs on Cloud Run today (Dockerfile.worker),
+# expressed as a Kubernetes workload. The worker clones arbitrary third-party
+# git repositories and forks a child process to parse them, which makes it the
+# single most security-sensitive thing in this system: its whole job is
+# executing against untrusted input.
+#
+# Every restriction below exists because of that, not because a linter asked
+# for it.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: archsetu-worker
+  namespace: archsetu
+  labels:
+    app.kubernetes.io/name: archsetu-worker
+# The worker never calls the Kubernetes API. Mounting a token it does not use
+# hands a credential to a process that parses untrusted code - if that process
+# is ever compromised, the token is the difference between "an attacker is in
+# a sandboxed pod" and "an attacker can talk to the control plane".
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: archsetu-worker
+  namespace: archsetu
+  labels:
+    app.kubernetes.io/name: archsetu-worker
+    app.kubernetes.io/component: worker
+spec:
+  # Exactly one, and not autoscaled.
+  #
+  # Not an oversight and not a cost decision. The job-claim function
+  # (supabase/migrations/009) hands a job to one consumer at a time, and the
+  # memory budget in analysis.worker.mts is computed for a single instance
+  # running CONCURRENCY=2 forked children at 512MB heap each. A second replica
+  # would double real memory demand against the same per-pod limit while
+  # contending for the same queue.
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate. A rolling update would briefly run two
+    # workers, which violates the constraint above. The worker's SIGTERM
+    # handler requeues whatever job it holds, so stopping first is safe and
+    # loses no work.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: archsetu-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: archsetu-worker
+    spec:
+      serviceAccountName: archsetu-worker
+      automountServiceAccountToken: false
+
+      # Pod-level security context. Duplicated at container level below
+      # because pod-level settings do not all inherit, and the ones that
+      # matter most are enforced per container.
+      securityContext:
+        runAsNonRoot: true
+        # Matches the `node` user baked into node:22-slim by Dockerfile.worker.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          # Blocks the ~44 syscalls Docker's default profile blocks, which is
+          # where most container escape primitives live. Required by the
+          # restricted Pod Security Standard.
+          type: RuntimeDefault
+
+      # A job that hangs past its own internal timeout should still be given
+      # time to requeue on SIGTERM rather than being SIGKILLed mid-write.
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: worker
+          # Replaced at deploy time with an immutable digest or commit-SHA tag.
+          # Never :latest - see the same rule enforced in
+          # infra/terraform/aws/variables.tf.
+          image: ghcr.io/archsetu/worker:REPLACE_ME
+          imagePullPolicy: IfNotPresent
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              # Not "drop the dangerous ones" - drop everything. This process
+              # binds a port above 1024, reads files and makes outbound HTTPS
+              # calls. It needs no Linux capability at all.
+              drop: ['ALL']
+            seccompProfile:
+              type: RuntimeDefault
+
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: '8080'
+            # Pinned explicitly rather than left to the code's default, so the
+            # memory budget is visible in the deployment and not only in a
+            # source comment. Must stay consistent with the limits below:
+            # CONCURRENCY=2 children x 512MB heap, plus the parent process and
+            # the git working tree, is what 2Gi is sized for.
+            - name: CHILD_MAX_OLD_SPACE_MB
+              value: '512'
+            - name: NEXT_PUBLIC_SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: archsetu-worker
+                  key: NEXT_PUBLIC_SUPABASE_URL
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: archsetu-worker
+                  key: SUPABASE_SERVICE_ROLE_KEY
+
+          resources:
+            # requests == limits for memory, deliberately.
+            #
+            # That makes the pod Guaranteed QoS, so it is the last thing the
+            # kubelet evicts under node pressure. For a worker holding an
+            # in-flight analysis, being evicted means the job is requeued and
+            # the whole clone-and-parse is repeated from scratch.
+            #
+            # CPU has a request but no limit. CPU limits throttle rather than
+            # kill, and throttling a parser mid-run turns a 40-second analysis
+            # into a multi-minute one for no benefit - the pod cannot harm
+            # neighbours it is not competing with.
+            requests:
+              cpu: '1'
+              memory: 2Gi
+            limits:
+              memory: 2Gi
+
+          ports:
+            - name: health
+              containerPort: 8080
+
+          # The health listener in analysis.worker.mts starts BEFORE the
+          # Supabase connection, specifically so a probe succeeds quickly
+          # instead of racing the first job claim.
+          startupProbe:
+            httpGet: { path: /, port: health }
+            periodSeconds: 5
+            failureThreshold: 12 # up to 60s to start
+          livenessProbe:
+            httpGet: { path: /, port: health }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Deliberately no readinessProbe. Readiness gates traffic from a
+          # Service, and nothing sends traffic here - this is a queue
+          # consumer. A readiness probe would be decoration.
+
+          volumeMounts:
+            # readOnlyRootFilesystem is on, but `git clone` has to write
+            # somewhere. Scoping the writable area to exactly the path the
+            # worker uses keeps the rest of the filesystem immutable, so a
+            # parser exploit cannot modify the application it is running in.
+            - name: jobs
+              mountPath: /tmp
+
+      volumes:
+        - name: jobs
+          emptyDir:
+            # Bounded so a pathological repository cannot fill the node's disk
+            # and take every other pod on it down with the worker. The
+            # worker's own size gate rejects oversized repos well before this.
+            sizeLimit: 20Gi

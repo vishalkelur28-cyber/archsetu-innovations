@@ -5,6 +5,7 @@ import { SvelteParser } from '../SvelteParser.js';
 import { ProtobufParser } from '../ProtobufParser.js';
 import { GraphQLParser } from '../GraphQLParser.js';
 import { BatchParser } from '../BatchParser.js';
+import { findDeadCode } from '../../analysis/DeadCodeFinder.js';
 
 describe('VueParser', () => {
   // Vue 3 <script setup> style - plain top-level function declarations,
@@ -59,6 +60,47 @@ export function add(a: number, b: number): number {
   it('returns an empty analysis for a component with no <script> block', () => {
     const result = VueParser.parseFile('<template><div>static</div></template>', 'Static.vue');
     expect(result.functions).toEqual([]);
+  });
+
+  // Regression test: a method with zero callers inside the <script> block
+  // itself, but wired up entirely from the <template> (`@click="..."`,
+  // `{{ fn(...) }}`), is real, live code - Vue's whole component model is
+  // built on exactly this wiring. Before this fix, DeadCodeFinder had no way
+  // to see template references at all (VueParser only ever handed it the
+  // <script> block's text), so every template-only-invoked method was
+  // confidently, incorrectly reported as dead - confirmed as a real,
+  // systematic false-positive category, not a theoretical edge case.
+  it('does not report a method only invoked from template bindings as dead code', () => {
+    const templateWiredSrc = `<template>
+  <div>
+    <button @click="handleClick">{{ formatLabel(count) }}</button>
+    <p v-if="isVisible">shown</p>
+  </div>
+</template>
+
+<script setup>
+const count = 0
+const isVisible = true
+
+function handleClick() {
+  console.log('clicked')
+}
+
+function formatLabel(n) {
+  return 'Count: ' + n
+}
+
+function genuinelyUnusedHelper() {
+  return 42
+}
+</script>
+`;
+    const result = VueParser.parseFile(templateWiredSrc, 'Wired.vue');
+    const dead = findDeadCode([result]).map((d) => d.function.name);
+
+    expect(dead).not.toContain('handleClick'); // bare @click="name" reference
+    expect(dead).not.toContain('formatLabel'); // called with args inside {{ }}
+    expect(dead).toContain('genuinelyUnusedHelper'); // a real dead-code case must still be caught
   });
 });
 

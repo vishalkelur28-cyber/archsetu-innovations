@@ -304,7 +304,7 @@ describe('HealthScorer - express-shaped fixture should not score as a D', () => 
     const health = calculateHealthScore({
       deadCodeRatio: 0,
       avgComplexity: 1.73,
-      maxComplexity: 14,
+      highComplexityRatio: 0.02,
       testFileRatio: 0.3,
       duplicationRatio: 0.04,
       oversizedFileRatio: 0.12,
@@ -320,7 +320,7 @@ describe('HealthScorer - express-shaped fixture should not score as a D', () => 
     const healthy = calculateHealthScore({
       deadCodeRatio: 0,
       avgComplexity: 1.73,
-      maxComplexity: 14,
+      highComplexityRatio: 0.02,
       testFileRatio: 0.3,
       duplicationRatio: 0.04,
       oversizedFileRatio: 0.12,
@@ -328,7 +328,7 @@ describe('HealthScorer - express-shaped fixture should not score as a D', () => 
     const highDeadCode = calculateHealthScore({
       deadCodeRatio: 0.85,
       avgComplexity: 1.73,
-      maxComplexity: 14,
+      highComplexityRatio: 0.02,
       testFileRatio: 0.3,
       duplicationRatio: 0.04,
       oversizedFileRatio: 0.12,
