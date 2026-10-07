@@ -6,13 +6,19 @@ on:
   push:
     branches: [main]
 
+# None of these jobs write to the repository, open a PR, or push anything, so
+# read-only is the correct default regardless of what the repository setting
+# happens to be.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Typecheck & test
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18.x, 20.x]
+        node-version: [20.x, 22.x]
 
     steps:
       - name: Checkout

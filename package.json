@@ -4,19 +4,48 @@
   "private": true,
   "description": "ArchSetu open-source analysis engine and CLI (monorepo root)",
   "engines": {
-    "node": ">=18.0.0",
+    "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
   },
   "scripts": {
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "clean": "turbo run clean && rm -rf node_modules"
+    "clean": "turbo run clean && rm -rf node_modules",
+    "check-rls": "node scripts/check-rls.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "turbo": "^2.0.6",
-    "typescript": "^5.5.2"
+    "typescript": "^5.5.2",
+    "pg": "^8.23.0"
   },
-  "packageManager": "pnpm@9.4.0"
+  "packageManager": "pnpm@9.4.0",
+  "pnpm": {
+    "_overridesComment": [
+      "Forces patched versions of TRANSITIVE dependencies this repo does not declare itself. Each entry exists because .github/workflows/security.yml gates on `pnpm audit --audit-level=high`; remove an entry once the parent package ships the fix (`pnpm why <pkg>` shows whether it still does anything).",
+      "",
+      "tinypool: vitest 3.2.7 pins ^1.1.1; the fix for two critical prototype-pollution advisories (GHSA-5gmw-xhrv-c9v3, GHSA-85c8-ppgw-ccpr) is in 2.1.2. tinypool 2.0.0 had exactly one breaking change - dropping Node 18, which this repo requires >=20 anyway. Verified by running the test suite under the override.",
+      "",
+      "Duplicated in pnpm-workspace.yaml because pnpm 9 reads this field and pnpm 10 reads that file. Keep the two identical."
+    ],
+    "overrides": {
+      "tinypool": ">=2.1.2"
+    },
+    "_auditConfigComment": [
+      "Advisories acknowledged and ignored, each with its reason. An ignore with no reason is a disabled gate.",
+      "",
+      "CVE-2026-93687 / GHSA-vfj7-8cjw-p6xm (braces, stack-exhaustion DoS through deeply nested patterns): no patched release exists - the advisory lists no fixed version. braces is reached only through fast-glob, with glob patterns this engine authors itself and never from user input, so the malicious-pattern precondition is absent. Re-check when braces publishes a fix, then delete both entries.",
+      "",
+      "Both forms are listed because pnpm 9.4 (the pinned packageManager) honours only ignoreCves; ignoreGhsas arrived in pnpm 9.10 and is what later versions read."
+    ],
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-93687"
+      ],
+      "ignoreGhsas": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ]
+    }
+  }
 }

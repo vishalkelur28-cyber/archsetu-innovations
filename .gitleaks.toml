@@ -1,0 +1,38 @@
+# gitleaks configuration for the secret-scan job in .github/workflows/security.yml
+#
+# Starts from the upstream default ruleset and narrows it, rather than
+# replacing it - extending means new upstream rules arrive automatically
+# instead of silently never running.
+#
+# The allowlist exists because this repository legitimately contains strings
+# that look exactly like live credentials and are not:
+#
+#   1. The analysis engine detects hardcoded secrets. Its tests prove that
+#      detection works by feeding realistic fake credentials in and asserting
+#      they are reported. A test that the scanner should be glad to see, not
+#      flag.
+#   2. Two modules carry the SHAPES of credentials as pattern source -
+#      private-key headers, connection-string forms - because detecting a
+#      thing means knowing what it looks like.
+#
+# Every entry is scoped to a specific path. Nothing here weakens scanning of
+# configuration, infrastructure or workflow files, which is where a real leak
+# would land.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented, reviewed non-secrets"
+
+paths = [
+  # Test fixtures: deliberately realistic fake credentials used to prove
+  # detection works.
+  '''.*__tests__.*\.(ts|tsx)$''',
+  '''.*\.test\.(ts|tsx)$''',
+
+  # The two detector modules, by exact path. A new file beside them is still
+  # scanned.
+  '''packages/core/src/analysis/SecurityRiskAnalyzer\.ts$''',
+  '''packages/core/src/analysis/GitHistorySecretScanner\.ts$''',
+]

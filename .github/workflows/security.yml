@@ -1,0 +1,86 @@
+name: Security
+
+# Security gates that ci.yml deliberately does not cover.
+#
+# ci.yml answers "does the code compile and pass its tests". Nothing in it
+# looks at whether a dependency has a published advisory or whether a secret
+# was committed. codeql.yml covers injection-shaped patterns in the source;
+# this workflow covers the other two.
+#
+# Split from ci.yml on purpose: an advisory published overnight is not a
+# reason to mark yesterday's green commit as broken, so this also runs on a
+# schedule and reports independently of whether anyone pushed.
+#
+# The platform monorepo this repository is synced from runs a superset of
+# these checks, including a row-level-security gate against its production
+# database (docs/platform-security/incidents/rls-incident.md). That gate
+# needs production credentials and so does not run here. The script behind
+# it is published at scripts/check-rls.mjs for anyone with a Supabase project
+# of their own to point it at.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # 06:00 UTC daily. Advisories are published continuously; without a
+    # scheduled run a vulnerability introduced by nothing more than the
+    # passage of time stays invisible until the next unrelated push.
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+
+# Least privilege by default; individual jobs widen this only where they must.
+permissions:
+  contents: read
+
+jobs:
+  # ── Software composition analysis ────────────────────────────────────────
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # Gate at `high`, not `moderate`. Build-time-only packages carry a
+      # standing population of moderate advisories that cannot be resolved
+      # without waiting on upstream, and failing on those trains everyone to
+      # ignore a red pipeline. High and critical are the tiers that warrant
+      # blocking a merge.
+      - name: pnpm audit (fail on high or critical)
+        run: pnpm audit --audit-level=high
+
+      # Always produce the full picture, including the moderates the gate
+      # above intentionally lets through, so the trend is visible on a green
+      # run rather than only when something breaks.
+      - name: Full advisory report (informational)
+        if: always()
+        run: pnpm audit || true
+
+  # ── Secret scanning ──────────────────────────────────────────────────────
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs history, not just the tip commit: a credential that
+          # was committed and then "removed" in a later commit is still in the
+          # pack and still valid. Depth 0 fetches the full history so the scan
+          # covers what an attacker cloning the repo would actually get.
+          fetch-depth: 0
+
+      # Allowlist in .gitleaks.toml: test fixtures and the two detector
+      # modules that carry credential shapes as pattern source.
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

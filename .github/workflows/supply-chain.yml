@@ -1,0 +1,230 @@
+name: Supply chain
+
+# Everything about the artifact that ships, as opposed to the source that was
+# written.
+#
+# The artifact here is an npm package, @archsetuweb/cli, not a container
+# image, and that changes what each check can honestly claim:
+#
+#   Trivy      known vulnerabilities in the dependency tree that builds and
+#              tests the package, read from pnpm-lock.yaml
+#   SBOM       an inventory of that tree, in the two formats consumers of
+#              SBOMs actually accept
+#   Cosign     a keyless signature over the tarball this commit builds, and
+#              over the SBOM, bound to this repository and workflow through
+#              the job's OIDC identity rather than a key anyone could steal
+#
+# One limit, stated rather than implied. The package on the npm registry is
+# published by a maintainer from the platform monorepo this repository is
+# synced from, not by this workflow. The signature produced here therefore
+# proves what THIS source builds to at THIS commit; it is not a signature
+# over the bytes on the registry. Closing that gap means publishing from this
+# workflow with `npm publish --provenance`, which is the listed next step in
+# docs/platform-security/README.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # A dependency tree accumulates advisories without anyone touching this
+    # repository. 07:00 UTC daily, an hour after security.yml so the two do
+    # not report at the same moment.
+    - cron: '0 7 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Scan, inventory and attest the npm package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for cosign keyless signing: the OIDC token is what binds the
+      # signature to this repo, ref and workflow.
+      id-token: write
+      # SARIF upload to the Security tab. Free on a public repository.
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # The exact bytes `npm publish` would upload, produced the same way.
+      # Listing the contents in the log means a reviewer can confirm the
+      # published surface is dist/ plus package.json and nothing else - no
+      # source, no tests, no stray local files.
+      - name: Pack the CLI exactly as npm would publish it
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pack"
+          cd packages/cli
+          FILENAME=$(npm pack --pack-destination "$RUNNER_TEMP/pack" --json \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].filename))')
+          echo "tarball=$RUNNER_TEMP/pack/$FILENAME" >> "$GITHUB_OUTPUT"
+          echo "Contents of $FILENAME:"
+          tar tzf "$RUNNER_TEMP/pack/$FILENAME"
+          # Same digest form npm records as dist.integrity, so the two can be
+          # compared directly with `npm view @archsetuweb/cli dist.integrity`.
+          echo "integrity=sha512-$(openssl dgst -sha512 -binary "$RUNNER_TEMP/pack/$FILENAME" | base64 -w0)" | tee -a "$GITHUB_OUTPUT"
+
+      # ── What is wrong with it ──────────────────────────────────────────
+      #
+      # Two passes on purpose. The first produces SARIF for the Security tab
+      # and never fails the build, so the full picture is always visible,
+      # including low-severity findings. The second is the actual gate.
+      - name: Trivy scan (report)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: sarif
+          output: trivy-repo.sarif
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+        continue-on-error: true
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-repo.sarif
+          category: trivy-repo
+
+      # Gated on HIGH and CRITICAL, and only on fixable findings.
+      #
+      # `ignore-unfixed` is the difference between a gate people act on and a
+      # gate people disable: failing on an advisory with no released patch
+      # tells you to do something that is not currently possible, every run,
+      # until the red build becomes background noise. Unfixed findings still
+      # appear in the report above.
+      - name: Trivy scan (gate)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: table
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+
+      # ── What is inside it ──────────────────────────────────────────────
+      #
+      # SPDX and CycloneDX both, because consumers differ: SPDX is what
+      # GitHub's dependency graph and most compliance tooling speak,
+      # CycloneDX is what most vulnerability scanners speak.
+      #
+      # An npm package's runtime dependencies are resolved on the consumer's
+      # machine from the ranges in package.json, so the inventory that can
+      # be produced here is of the tree used to build and test the artifact,
+      # from the lockfile. That is still the answer to "are we affected?"
+      # for everything the maintainers run, which is the question an SBOM
+      # exists to answer in minutes rather than days.
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: false
+
+      - name: Publish SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.*.json
+          retention-days: 90
+
+      # ── Where it came from ─────────────────────────────────────────────
+      #
+      # Keyless signing. No private key exists to be stolen, rotated or
+      # committed by accident: cosign exchanges this job's OIDC token for a
+      # short-lived certificate from Fulcio, signs, and records the signature
+      # in Rekor's public transparency log. The certificate carries the
+      # repository, ref and workflow that produced it.
+      #
+      # Runs only on main. A pull request's build will never be published,
+      # and signing something that will never ship is theatre.
+      - name: Install cosign
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the tarball and the SBOM
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          cp "$TARBALL" cli.tgz
+          cosign sign-blob --yes \
+            --output-signature cli.tgz.sig \
+            --output-certificate cli.tgz.pem \
+            cli.tgz
+          cosign sign-blob --yes \
+            --output-signature sbom.spdx.json.sig \
+            --output-certificate sbom.spdx.json.pem \
+            sbom.spdx.json
+          echo "Verify with:"
+          echo "  cosign verify-blob --signature cli.tgz.sig --certificate cli.tgz.pem \\"
+          echo "    --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \\"
+          echo "    --certificate-oidc-issuer https://token.actions.githubusercontent.com cli.tgz"
+
+      - name: Publish the signed artifacts
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-${{ github.sha }}
+          path: |
+            cli.tgz
+            cli.tgz.sig
+            cli.tgz.pem
+            sbom.spdx.json.sig
+            sbom.spdx.json.pem
+          retention-days: 90
+
+  # ── Dependency review on pull requests ───────────────────────────────────
+  #
+  # Complements the `pnpm audit` gate in security.yml rather than duplicating
+  # it. That one asks "does the lockfile contain a known-vulnerable package",
+  # a property of the whole tree. This one asks "does THIS pull request
+  # introduce one", which is the question a reviewer actually has, and it
+  # comments the answer inline instead of requiring someone to read a log.
+  #
+  # It also checks licences. This package is MIT; a copyleft dependency
+  # arriving unnoticed would put every downstream user in a position they did
+  # not agree to, and no vulnerability scanner will ever mention it.
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4.9.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: always
+          deny-licenses: AGPL-3.0, AGPL-3.0-only, AGPL-3.0-or-later

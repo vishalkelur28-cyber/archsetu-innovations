@@ -1,0 +1,68 @@
+name: OpenSSF Scorecard
+
+# An outside, standardised assessment of this repository's security posture.
+#
+# Everything else in .github/workflows/ is a check we wrote for ourselves,
+# which means it measures exactly what we already thought to measure. A
+# Scorecard run applies the same ~18 checks the OpenSSF applies to any
+# project - branch protection, pinned dependencies, token permissions,
+# dangerous workflow patterns, binary artifacts, code review practice - and
+# scores them independently of anyone's opinion here.
+#
+# That independence is the point. It is the difference between "we believe
+# our pipeline is solid" and a number a third party can reproduce, and it
+# routinely flags categories a self-assessment misses entirely.
+#
+# Results are published to the OpenSSF dataset, which is what makes the badge
+# in README.md resolve and lets anyone verify the score without trusting us.
+# Publishing requires a public repository, which this is; the platform
+# monorepo this repository is synced from is private and cannot publish.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly. Scorecard measures repository configuration, which drifts on a
+    # scale of weeks rather than commits - a daily run would mostly re-report
+    # the same number.
+    - cron: '30 7 * * 1'
+  branch_protection_rule:
+  workflow_dispatch: {}
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Upload the SARIF so findings land in the Security tab.
+      security-events: write
+      # Publish to the OpenSSF public dataset.
+      id-token: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false # Scorecard itself flags leaving the token on disk
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload results as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-results
+          path: scorecard-results.sarif
+          retention-days: 30
+
+      - name: Upload to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scorecard-results.sarif

@@ -1,0 +1,53 @@
+name: Terraform
+
+# Infrastructure is code (infra/terraform), so it gets checked like code.
+#
+# fmt and validate only - no init against a real backend, no plan, no
+# credentials, no cloud account. This catches malformed HCL, unknown
+# attributes and type errors, which is the entire class of mistake that
+# would otherwise only surface at `terraform apply` time against live
+# infrastructure.
+#
+# What this does NOT establish, stated so nobody has to infer it: neither
+# stack has been applied from this repository. The AWS stack has never been
+# applied anywhere. See docs/platform-security/ARCHITECTURE.md for what is
+# actually running today.
+on:
+  push:
+    branches: [main]
+    paths: ['infra/terraform/**', '.github/workflows/terraform.yml']
+  pull_request:
+    branches: [main]
+    paths: ['infra/terraform/**', '.github/workflows/terraform.yml']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Format and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff infra/terraform
+
+      # Each stack is a separate root module with its own providers, so they
+      # initialize and validate independently. `-backend=false` means no
+      # state, no remote, no credentials - just the provider schemas needed
+      # to type-check the configuration.
+      - name: Validate aws
+        run: |
+          terraform -chdir=infra/terraform/aws init -backend=false
+          terraform -chdir=infra/terraform/aws validate
+
+      - name: Validate gcp
+        run: |
+          terraform -chdir=infra/terraform/gcp init -backend=false
+          terraform -chdir=infra/terraform/gcp validate

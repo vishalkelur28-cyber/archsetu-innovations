@@ -30,6 +30,10 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
+          # security-extended adds the lower-precision, higher-recall queries
+          # on top of the default set. Appropriate here because results are
+          # reviewed by a human rather than gating a merge.
+          queries: security-extended
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3

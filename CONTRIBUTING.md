@@ -10,7 +10,7 @@ Requirements: Node.js 20+, pnpm 9+.
 
 ```bash
 git clone https://github.com/vishalkelur28-cyber/archsetu-innovations.git
-cd archsetu
+cd archsetu-innovations
 pnpm install
 pnpm build      # builds packages/core, which packages/cli depends on
 pnpm test       # runs the vitest suite in packages/core
@@ -133,3 +133,25 @@ in most codebases.
 
 This project follows the [Contributor Covenant](./CODE_OF_CONDUCT.md). Report
 violations to coder@archsetu.com.
+
+## Where the source of truth is
+
+`packages/core` and `packages/cli` here are the same code that ships in
+`@archsetuweb/cli` on npm, but the package is published from the ArchSetu
+platform monorepo, which is private because it also contains the hosted web
+application. This repository is kept identical to that monorepo's open-source
+surface by a sync script run from there (`scripts/sync-public.mjs` in the
+monorepo). `infra/`, `scripts/check-rls.mjs` and the documents under
+`docs/platform-security/` arrive the same way.
+
+What that means for a contribution:
+
+- Pull requests here are welcome and are reviewed here. Once merged, the
+  maintainer applies the same change in the monorepo, and the next sync
+  carries it back to this repository unchanged. Your commit stays in this
+  repository's history.
+- Files under `docs/platform-security/` carry a banner saying they are
+  synced. An edit made here would be overwritten; open an issue instead and
+  the fix lands at the source.
+- Package `README.md` files are the exception. They are written here, for
+  people who found the repo on GitHub, and a sync never touches them.

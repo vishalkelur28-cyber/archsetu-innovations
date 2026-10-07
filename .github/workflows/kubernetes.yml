@@ -1,0 +1,184 @@
+name: Kubernetes
+
+# Proves the manifests in infra/k8s actually work, rather than merely parsing.
+#
+# This exists because of a lesson from earlier in this repository: Dockerfile.web
+# was written, reviewed, and committed without ever being built, and then took
+# five CI rounds to make work. Infrastructure that has never been applied is a
+# guess with good syntax.
+#
+# So this does not stop at linting. It creates a real cluster, applies the
+# manifests into it, and asserts the security properties hold - including by
+# trying to break them.
+on:
+  push:
+    branches: [main]
+    paths: ['infra/k8s/**', '.github/workflows/kubernetes.yml']
+  pull_request:
+    branches: [main]
+    paths: ['infra/k8s/**', '.github/workflows/kubernetes.yml']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Schema and policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Schema validation against the real Kubernetes OpenAPI spec. Catches a
+      # misspelled field, which YAML itself is perfectly happy to accept and
+      # the API server silently ignores.
+      - name: Install kubeconform
+        run: |
+          curl -sSLo kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate schemas
+        run: kubeconform -strict -summary -ignore-missing-schemas infra/k8s/
+
+      # Misconfiguration scanning. Trivy's Kubernetes checks look for exactly
+      # the things this repo cares about - running as root, privilege
+      # escalation, missing resource limits, writable root filesystems - and
+      # gate on them rather than reporting them.
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra/k8s
+          format: table
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+
+  cluster:
+    name: Apply to a real cluster
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create a kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: archsetu-ci
+          # Pinned. A cluster version that drifts under you turns an unrelated
+          # push into a mysterious failure.
+          node_image: kindest/node:v1.31.0
+
+      - name: Apply manifests
+        run: |
+          set -euo pipefail
+          kubectl apply -f infra/k8s/namespace.yaml
+          kubectl apply -f infra/k8s/networkpolicy.yaml
+
+          # A placeholder secret so the Deployment's env references resolve.
+          # Values are obvious nonsense; the worker will fail to reach
+          # Supabase, which is fine - what is being tested here is whether the
+          # POD is admitted and scheduled under the restricted policy, not
+          # whether it can talk to a database.
+          kubectl -n archsetu create secret generic archsetu-worker \
+            --from-literal=NEXT_PUBLIC_SUPABASE_URL=https://ci.invalid \
+            --from-literal=SUPABASE_SERVICE_ROLE_KEY=ci-placeholder
+
+          # The real image is not published, so substitute one that exists.
+          # This is honest about what the test covers: manifest correctness
+          # and admission-policy enforcement, not the worker's own behaviour.
+          sed 's|ghcr.io/archsetu/worker:REPLACE_ME|ghcr.io/nginxinc/nginx-unprivileged:1.27-alpine|' \
+            infra/k8s/worker.yaml | kubectl apply -f -
+
+      - name: Wait for the pod to be admitted and running
+        run: |
+          set -euo pipefail
+          if ! kubectl -n archsetu rollout status deploy/archsetu-worker --timeout=180s; then
+            echo "::error::Deployment did not become ready"
+            kubectl -n archsetu describe deploy/archsetu-worker
+            kubectl -n archsetu get events --sort-by=.lastTimestamp | tail -30
+            kubectl -n archsetu logs -l app.kubernetes.io/name=archsetu-worker --tail=50 || true
+            exit 1
+          fi
+
+      # ── Assert the hardening actually took effect ──────────────────────
+      #
+      # Applying a manifest that SAYS runAsNonRoot proves nothing; the point
+      # is what the API server admitted. These read the live object back.
+      - name: Verify the security context on the running pod
+        run: |
+          set -euo pipefail
+          POD=$(kubectl -n archsetu get pod -l app.kubernetes.io/name=archsetu-worker -o name | head -1)
+          echo "Checking $POD"
+
+          check() {
+            local path="$1" expected="$2" label="$3"
+            local actual
+            actual=$(kubectl -n archsetu get "$POD" -o jsonpath="$path")
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$label is '$actual', expected '$expected'"
+              exit 1
+            fi
+            echo "  ok  $label = $actual"
+          }
+
+          check '{.spec.securityContext.runAsNonRoot}' 'true' 'runAsNonRoot'
+          check '{.spec.containers[0].securityContext.allowPrivilegeEscalation}' 'false' 'allowPrivilegeEscalation'
+          check '{.spec.containers[0].securityContext.readOnlyRootFilesystem}' 'true' 'readOnlyRootFilesystem'
+          check '{.spec.containers[0].securityContext.capabilities.drop[0]}' 'ALL' 'capabilities dropped'
+          check '{.spec.containers[0].securityContext.seccompProfile.type}' 'RuntimeDefault' 'seccompProfile'
+          check '{.spec.automountServiceAccountToken}' 'false' 'service account token not mounted'
+
+      # The strongest assertion available: prove the namespace REJECTS a pod
+      # that violates the restricted profile. A policy that has never refused
+      # anything has not been shown to work.
+      - name: Verify Pod Security Admission rejects a privileged pod
+        run: |
+          set -euo pipefail
+          cat > /tmp/bad-pod.yaml <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: should-be-rejected
+            namespace: archsetu
+          spec:
+            containers:
+              - name: bad
+                image: busybox:1.36
+                command: ['sleep', '60']
+                securityContext:
+                  privileged: true
+                  runAsUser: 0
+          EOF
+
+          if kubectl apply -f /tmp/bad-pod.yaml 2>/tmp/err.txt; then
+            echo "::error::A privileged pod was ADMITTED. The restricted Pod Security Standard is not being enforced."
+            kubectl -n archsetu delete pod should-be-rejected --ignore-not-found
+            exit 1
+          fi
+
+          if ! grep -qi "violates PodSecurity" /tmp/err.txt; then
+            echo "::error::Pod was rejected, but not by Pod Security Admission. Reason:"
+            cat /tmp/err.txt
+            exit 1
+          fi
+          echo "  ok  privileged pod correctly rejected by Pod Security Admission"
+          grep -o 'violates PodSecurity.*' /tmp/err.txt | head -1
+
+      - name: Verify the default-deny NetworkPolicy exists and selects everything
+        run: |
+          set -euo pipefail
+          SEL=$(kubectl -n archsetu get networkpolicy default-deny -o jsonpath='{.spec.podSelector}')
+          TYPES=$(kubectl -n archsetu get networkpolicy default-deny -o jsonpath='{.spec.policyTypes}')
+          echo "  podSelector: $SEL"
+          echo "  policyTypes: $TYPES"
+          [ "$SEL" = "{}" ] || { echo "::error::default-deny does not select all pods"; exit 1; }
+          echo "$TYPES" | grep -q Ingress || { echo "::error::Ingress not denied"; exit 1; }
+          echo "$TYPES" | grep -q Egress  || { echo "::error::Egress not denied";  exit 1; }
+          echo "  ok  default-deny covers ingress and egress for every pod"
+
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl -n archsetu get all
+          kubectl -n archsetu get events --sort-by=.lastTimestamp | tail -40

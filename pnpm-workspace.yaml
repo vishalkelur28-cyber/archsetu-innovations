@@ -1,2 +1,18 @@
 packages:
   - "packages/*"
+
+# Security overrides - forcing patched versions of transitive dependencies.
+# Duplicated deliberately: pnpm 9 (what `packageManager` pins) reads
+# `pnpm.overrides` from package.json; pnpm 10 reads this file. Each version
+# reads exactly one of the two, so they cannot conflict. Reasons for every
+# entry live in the _overridesComment block in package.json. Keep identical.
+overrides:
+  tinypool: ">=2.1.2"
+
+# Advisories acknowledged and ignored; reasons in package.json. pnpm 9.4
+# honours ignoreCves; ignoreGhsas arrived in pnpm 9.10. Same advisory, both.
+auditConfig:
+  ignoreCves:
+    - CVE-2026-93687
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm
