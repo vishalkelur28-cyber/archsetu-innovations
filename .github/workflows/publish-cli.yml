@@ -1,0 +1,128 @@
+name: Publish CLI to npm
+
+# Publishing from here, rather than from a laptop, is the fix for a specific
+# recurring failure: npm two-factor authentication.
+#
+# The account this package belongs to has 2FA set to `auth-and-writes`, so a
+# local `npm publish` needs a one-time password. Access tokens used to sidestep
+# that, and the 0.1.21 release went out exactly that way, but a token only
+# bypasses 2FA when it was created with the "Bypass two-factor authentication"
+# box ticked, `npm login` silently replaces such a token with a session token
+# that does not, a package-level "disallow tokens" setting overrides the box
+# anyway, and GitHub is removing the bypass for direct publishing in January
+# 2027. Every one of those is a way for a release to stop working for reasons
+# that have nothing to do with the code.
+#
+# Trusted publishing removes the credential entirely. GitHub mints a
+# short-lived OIDC token for this specific workflow in this specific
+# repository, npm verifies it against the trusted publisher configured on the
+# package, and nothing long-lived exists to expire, leak or be overwritten.
+#
+# It also gets provenance for free. This repository is public, so npm can
+# publish a signed attestation linking the tarball to the commit and workflow
+# that produced it, and the package page shows it. For a tool whose entire
+# pitch is that it computes rather than guesses, being able to prove which
+# source produced the published bytes is worth having.
+#
+# ONE-TIME SETUP, on npmjs.com, before this can run:
+#   @archsetuweb/cli -> Settings -> Trusted publisher -> GitHub Actions
+#     Organization or user:  vishalkelur28-cyber
+#     Repository:            archsetu-innovations
+#     Workflow filename:     publish-cli.yml
+#     Environment:           npm-publish
+# Then create a repository environment of the same name under
+# Settings -> Environments, and add yourself as a required reviewer so a
+# release waits for an explicit approval rather than going out on a tag alone.
+
+on:
+  # A tag is the deliberate signal that a version is meant to go out. The
+  # version is NOT derived from the tag: package.json remains the single
+  # source of truth, and the job fails if the two disagree rather than
+  # quietly publishing something nobody named.
+  push:
+    tags:
+      - 'cli-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build, verify and publish
+    runs-on: ubuntu-latest
+    environment: npm-publish
+
+    permissions:
+      contents: read
+      # The whole point: lets GitHub mint the OIDC token npm checks.
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      # setup-node pins whatever npm ships with the Node release, and trusted
+      # publishing needs npm 11.5.1 or newer. Without this the job fails at
+      # the final step with an authentication error that looks like a
+      # permissions problem rather than a version one.
+      - name: Use an npm that supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check the tag matches the version being published
+        if: startsWith(github.ref, 'refs/tags/cli-v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#cli-v}"
+          PKG_VERSION="$(node -p "require('./packages/cli/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME says $TAG_VERSION, packages/cli/package.json says $PKG_VERSION."
+            echo "Publishing either one would be a guess. Fix whichever is wrong and tag again."
+            exit 1
+          fi
+          echo "Publishing @archsetuweb/cli@$PKG_VERSION"
+
+      - name: Refuse to republish a version that already exists
+        run: |
+          PKG_VERSION="$(node -p "require('./packages/cli/package.json').version")"
+          # npm would reject this anyway, but it does so after building and
+          # testing, and the error is easier to act on when it arrives first.
+          if npm view "@archsetuweb/cli@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "@archsetuweb/cli@$PKG_VERSION is already on the registry."
+            echo "npm never lets a version number be reused. Bump the version and tag again."
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+      # Proves the thing a user actually runs, against the build that is about
+      # to be published, rather than trusting that the unit tests imply it.
+      - name: Self-check the MCP server
+        run: node packages/cli/dist/cli.mjs mcp --check packages/core
+
+      - name: Publish
+        # No NODE_AUTH_TOKEN and no --otp: the OIDC token minted above is the
+        # credential. --provenance records which commit and workflow built it.
+        run: npm publish --access public --provenance
+        working-directory: packages/cli
