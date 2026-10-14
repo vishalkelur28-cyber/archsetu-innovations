@@ -29,10 +29,17 @@ name: Publish CLI to npm
 #     Organization or user:  vishalkelur28-cyber
 #     Repository:            archsetu-innovations
 #     Workflow filename:     publish-cli.yml
-#     Environment:           npm-publish
-# Then create a repository environment of the same name under
-# Settings -> Environments, and add yourself as a required reviewer so a
-# release waits for an explicit approval rather than going out on a tag alone.
+#     Environment name:      leave blank
+#     Allowed actions:       tick "Allow npm publish"
+# Every field is case-sensitive and must match exactly. npm does not validate
+# the configuration when it is saved, so a mismatch only shows up as a 404 or
+# ENEEDAUTH on the publish step, long after the fact.
+#
+# The environment field is left blank deliberately. A GitHub environment is
+# worth adding later for its approval gate, but it has to be named identically
+# on both sides, and an empty box here against a job-level `environment:` was
+# exactly the mismatch that failed the first release attempt. Add it to both
+# at once or to neither.
 
 on:
   # A tag is the deliberate signal that a version is meant to go out. The
@@ -51,7 +58,6 @@ jobs:
   publish:
     name: Build, verify and publish
     runs-on: ubuntu-latest
-    environment: npm-publish
 
     permissions:
       contents: read
