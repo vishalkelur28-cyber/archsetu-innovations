@@ -6,10 +6,10 @@ import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
  * Go function: func (receiver) FuncName(params) (returns) {
  * Group 1: optional receiver, Group 2: func name, Group 3: params
  */
-const FUNC_DEF = /^func\s+(?:\(([^)]+)\)\s+)?(\w+)\s*\(([^)]*)\)/gm;
+const FUNC_DEF = /^func\s+(?:\(([^)]+)\)\s+)?([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)/gm;
 
-const STRUCT_DEF = /^type\s+(\w+)\s+struct\s*\{/gm;
-const INTERFACE_DEF = /^type\s+(\w+)\s+interface\s*\{/gm;
+const STRUCT_DEF = /^type\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s+struct\s*\{/gm;
+const INTERFACE_DEF = /^type\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s+interface\s*\{/gm;
 
 /**
  * Go imports appear in blocks:
@@ -21,7 +21,7 @@ const INTERFACE_DEF = /^type\s+(\w+)\s+interface\s*\{/gm;
  */
 const IMPORT_BLOCK = /import\s+\(([^)]+)\)/gs;
 const IMPORT_SINGLE = /^import\s+"([^"]+)"/gm;
-const IMPORT_LINE = /^\s+(?:(\w+)\s+)?"([^"]+)"/gm;
+const IMPORT_LINE = /^\s+(?:([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s+)?"([^"]+)"/gm;
 
 export const GoParser: LanguageParser = {
   language: 'go',
@@ -128,7 +128,7 @@ function parseParams(raw: string): string[] {
 
 function extractCalls(body: string, selfName: string): string[] {
   const calls = new Set<string>();
-  const pattern = /\b(\w+)\s*\(/g;
+  const pattern = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(/g;
   let m: RegExpExecArray | null;
   const SKIP = new Set(['if', 'for', 'switch', 'select', 'go', 'defer', 'return', 'make', 'len', 'cap', 'append', 'copy', 'new', selfName]);
   while ((m = pattern.exec(body)) !== null) {

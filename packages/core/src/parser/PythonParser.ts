@@ -3,10 +3,10 @@ import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from 
 import { calculateComplexity, extractIndentedBody, stripStringsAndComments } from './BaseParser.js';
 
 /** def funcName( - captures name and params */
-const FUNC_DEF = /^( *)(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)\s*(?:->.*?)?:/gm;
+const FUNC_DEF = /^( *)(?:async\s+)?def\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)\s*(?:->.*?)?:/gm;
 
 /** class ClassName(Base): */
-const CLASS_DEF = /^( *)class\s+(\w+)(?:\s*\(([^)]*)\))?\s*:/gm;
+const CLASS_DEF = /^( *)class\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s*\(([^)]*)\))?\s*:/gm;
 
 /** from module import names  OR  import module */
 const IMPORT_STMT = /^(?:from\s+(\S+)\s+import\s+([\s\S]+?)|import\s+([\w.,\s]+))$/gm;

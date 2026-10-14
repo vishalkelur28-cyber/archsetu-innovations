@@ -3,12 +3,14 @@
  * ArchSetu CLI
  *
  * Usage:
+ *   archsetu share                      <- one command, prints a public link
  *   archsetu analyze ./path/to/repo
  *   archsetu analyze --json ./path/to/repo
  *   archsetu health ./path/to/repo
  *   archsetu dead-code ./path/to/repo
  *   archsetu install-hook --min-score 60
  *   archsetu uninstall-hook
+ *   archsetu mcp
  */
 
 import { Command } from 'commander';
@@ -25,6 +27,29 @@ import {
   writeJsonToStdout,
 } from '@archsetu/core';
 import { checkDependencyVulnerabilities } from './osv.js';
+import { runMcpServer } from './mcp/server.js';
+import { runSelfCheck } from './mcp/selfCheck.js';
+import { CLI_VERSION } from './version.js';
+import { runShare, DEFAULT_API_URL as SHARE_API_URL } from './share.js';
+
+/**
+ * How long the MCP server serves a cached analysis before flagging it stale.
+ * Two minutes is a deliberate middle: an agent asking several questions in a
+ * row should not pay for a re-analysis each time, but an agent that edits a
+ * file should not be told about the old version of it for long either. See
+ * mcp/analysisCache.ts for why this is a TTL rather than real change
+ * detection.
+ */
+const MCP_DEFAULT_CACHE_TTL_SECONDS = 120;
+
+/**
+ * How long `mcp --check` waits for the one full analysis it runs.
+ *
+ * Generous on purpose: the check exists largely to answer "is this
+ * repository too big for my machine", and a timeout tuned to a small repo
+ * would report a failure for the exact case the user is asking about.
+ */
+const MCP_CHECK_ANALYSIS_TIMEOUT_MS = 10 * 60 * 1000;
 
 // The exact hostname that actually serves 200s - archsetu.com (no www) is a
 // 308 redirect to this at the Vercel domain level. Deliberately NOT using
@@ -61,19 +86,100 @@ const program = new Command();
 program
   .name('archsetu')
   .description('Engineering Intelligence Platform CLI')
-  .version('0.1.0');
+  .version(CLI_VERSION);
+
+// ─── share ────────────────────────────────────────────────────────────────────
+/**
+ * The whole student flow in one command.
+ *
+ * The old route was: run a command, redirect its output with `>`, find the
+ * file, upload it. Four steps, and real people failed at three of them - the
+ * redirect swallowed npx's install prompt so the terminal appeared to hang, and
+ * the shell's instantly-created 0-byte file was indistinguishable from a crash
+ * while the work ran. This removes the redirect, the file and the upload.
+ *
+ * No prompts, by design. A hidden prompt is precisely what broke the old flow,
+ * so everything configurable is a flag with a sensible default.
+ *
+ * Every flag below has a default that works, and the defaults are read off the
+ * student's own disk - the README for the description, `origin` for the code
+ * link, the manifests for the stack. That ordering is the point: a flag nobody
+ * knows about is not a feature, so nothing the page needs may depend on one
+ * being passed. The flags exist to correct a guess, not to supply the content.
+ */
+program
+  .command('share [dir]')
+  .description('Put this project on the internet and print its address')
+  .option('--name <title>', 'Title shown on the page (default: the folder name)')
+  .option('--no-host', 'Publish a page about the project without hosting the site')
+  .option('--as <address>', 'Web address to claim, e.g. my-project (default: from the title)')
+  .option('--about <text>', 'What your project does (default: your README\'s first paragraph)')
+  .option('--no-readme', 'Do not take the description from your README')
+  .option(
+    '--highlight <text>',
+    'Something worth reading about the project; repeat for up to 6',
+    (value: string, previous: string[] = []) => [...previous, value],
+    [] as string[],
+  )
+  .option('--demo <url>', 'Where it is running, if it is running somewhere')
+  .option('--repo <url>', 'Link to the code (default: your git "origin" remote)')
+  .option('--video <url>', 'Link to a demo video')
+  .option('--writeup <url>', 'Link to a blog post or write-up')
+  .option('--stack <list>', 'Comma-separated technologies (default: detected from your project)')
+  .option('--api-url <url>', 'ArchSetu API base URL', SHARE_API_URL)
+  .option('--max-files <n>', 'Maximum files to analyze', (v) => parseInt(v, 10), 50_000)
+  .action(
+    async (
+      dir: string | undefined,
+      opts: {
+        name?: string;
+        as?: string;
+        about?: string;
+        readme?: boolean;
+        highlight?: string[];
+        demo?: string;
+        repo?: string;
+        video?: string;
+        writeup?: string;
+        stack?: string;
+        host?: boolean;
+        apiUrl: string;
+        maxFiles: number;
+      },
+    ) => {
+      // `--highlight` is collected by commander under its own singular name;
+      // runShare takes a list called `highlights`, so the rename happens here
+      // rather than teaching the share module about commander's shape.
+      await runShare(dir, { ...opts, highlights: opts.highlight ?? [] });
+    },
+  );
 
 // ─── analyze ──────────────────────────────────────────────────────────────────
 program
   .command('analyze [dir]')
   .description('Run full analysis on a local directory')
   .option('--json', 'Output as JSON')
-  .action(async (dir: string | undefined, opts: { json?: boolean }) => {
+  // Writing the file directly removes the shell redirect, and with it the whole
+  // class of failures the redirect caused: npx's install prompt being captured
+  // into the output, PowerShell's byte-order mark, and a 0-byte file appearing
+  // before any work has happened.
+  .option('--out <file>', 'Write the JSON to a file instead of stdout')
+  .action(async (dir: string | undefined, opts: { json?: boolean; out?: string }) => {
     const rootDir = path.resolve(dir ?? '.');
-    const spinner = opts.json ? null : ora(`Analyzing ${rootDir}...`).start();
+    const writingFile = Boolean(opts.out);
+    const spinner = opts.json && !writingFile ? null : ora(`Analyzing ${rootDir}...`).start();
 
     try {
       const result = await analyzeRepo(rootDir);
+
+      if (opts.out) {
+        const target = path.resolve(opts.out);
+        fs.writeFileSync(target, JSON.stringify(result, null, 2), 'utf8');
+        spinner?.succeed(
+          `Analysis complete: ${result.health.score}/100 (${result.health.grade}) -> ${target}`,
+        );
+        return;
+      }
 
       spinner?.succeed(`Analysis complete in ${(result as { analyzedAt?: string }).analyzedAt ?? 'N/A'}`);
 
@@ -535,6 +641,75 @@ program
         fs.writeFileSync(fullPath, `${AI_RULES_BLOCK}\n`);
         console.log(chalk.green(`${target.label}: created ${target.relativePath}`));
       }
+    }
+  });
+
+// ─── mcp ──────────────────────────────────────────────────────────────────────
+program
+  .command('mcp [dir]')
+  .description('Run an MCP server over stdio, exposing this analysis to an AI coding agent')
+  .option(
+    '--root <dir>',
+    'Allow an additional repository (repeatable). The server will only ever read inside these directories.',
+    (value: string, previous: string[]) => [...previous, value],
+    [] as string[],
+  )
+  .option(
+    '--cache-ttl <seconds>',
+    'How long a cached analysis is served before it is marked stale',
+    (v) => parseInt(v, 10),
+    MCP_DEFAULT_CACHE_TTL_SECONDS,
+  )
+  .option('--max-files <n>', 'Maximum files to analyze per repository', (v) => parseInt(v, 10))
+  .option(
+    '--check',
+    'Do not serve. Start a server, talk to it exactly as a client would, and report whether it works.',
+  )
+  .action((dir: string | undefined, opts: { root: string[]; cacheTtl: number; maxFiles?: number; check?: boolean }) => {
+    // The positional directory and every --root are equivalent allowlist
+    // entries; the first one is the default repository for tool calls that
+    // do not name one. Defaulting to cwd is what makes the common
+    // single-repo config a bare `archsetu mcp` with no arguments at all.
+    const roots = [...(dir ? [dir] : []), ...opts.root];
+    if (roots.length === 0) roots.push(process.cwd());
+
+    const cacheTtlSeconds = Number.isFinite(opts.cacheTtl) && opts.cacheTtl > 0
+      ? opts.cacheTtl
+      : MCP_DEFAULT_CACHE_TTL_SECONDS;
+
+    if (opts.check === true) {
+      // The self-check writes a human-readable report to stdout, which is
+      // the opposite of what the server does with that stream - so it
+      // deliberately never reaches runMcpServer, and the two never share a
+      // process.
+      const [checkDir, ...extraRoots] = roots as [string, ...string[]];
+      runSelfCheck({
+        dir: path.resolve(checkDir),
+        extraRoots: extraRoots.map((root) => path.resolve(root)),
+        maxFiles: Number.isFinite(opts.maxFiles) ? opts.maxFiles : undefined,
+        analysisTimeoutMs: MCP_CHECK_ANALYSIS_TIMEOUT_MS,
+      })
+        .then((code) => process.exit(code))
+        .catch((err: unknown) => {
+          console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        });
+      return;
+    }
+
+    try {
+      runMcpServer({
+        roots,
+        cacheTtlMs: cacheTtlSeconds * 1000,
+        maxFiles: Number.isFinite(opts.maxFiles) ? opts.maxFiles : undefined,
+      });
+    } catch (err) {
+      // Startup failures (a --root that does not exist) go to stderr and a
+      // non-zero exit, never to stdout: stdout is the protocol channel, and
+      // a human-readable error written there would be parsed as a malformed
+      // MCP message by whatever launched this.
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
     }
   });
 

@@ -2,9 +2,9 @@ import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 
-const METHOD_DEF = /^\s*(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|sealed|partial|new|extern)\s+)*(?:[\w<>[\]?]+\s+)+(\w+)\s*\(([^)]*)\)\s*(?:where[^{]*)?\s*\{/gm;
+const METHOD_DEF = /^\s*(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|sealed|partial|new|extern)\s+)*(?:[\w<>[\]?]+\s+)+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)\s*(?:where[^{]*)?\s*\{/gm;
 
-const CLASS_DEF = /^\s*(?:(?:public|private|protected|internal|abstract|sealed|static|partial)\s+)*(?:class|struct|interface|record|enum)\s+(\w+)(?:\s*:\s*([\w<>.,\s]+))?\s*(?:where[^{]*)?\s*\{/gm;
+const CLASS_DEF = /^\s*(?:(?:public|private|protected|internal|abstract|sealed|static|partial)\s+)*(?:class|struct|interface|record|enum)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s*:\s*([\w<>.,\s]+))?\s*(?:where[^{]*)?\s*\{/gm;
 
 const USING_STMT = /^using\s+(?:static\s+)?([\w.]+);/gm;
 
@@ -103,7 +103,7 @@ function parseParams(raw: string): string[] {
 
 function extractCalls(body: string, selfName: string): string[] {
   const calls = new Set<string>();
-  const pattern = /\b(\w+)\s*\(/g;
+  const pattern = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(/g;
   let m: RegExpExecArray | null;
   const SKIP = new Set(['if', 'for', 'foreach', 'while', 'switch', 'catch', 'return', 'new', 'typeof', 'nameof', selfName]);
   while ((m = pattern.exec(body)) !== null) {

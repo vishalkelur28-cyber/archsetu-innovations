@@ -18,13 +18,13 @@ import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 // matching genuinely top-level (column-0) items exactly as before.
 
 /** fn name<generics>(params) -> ReturnType { */
-const FUNC_DEF = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)(?:<[^>]*>)?\s*\(([^)]*)\)/gm;
+const FUNC_DEF = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:<[^>]*>)?\s*\(([^)]*)\)/gm;
 
 /** struct Name */
-const STRUCT_DEF = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)/gm;
+const STRUCT_DEF = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?struct\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)/gm;
 
 /** impl Name */
-const IMPL_DEF = /^[ \t]*impl(?:<[^>]+>)?\s+(?:[\w:]+\s+for\s+)?(\w+)/gm;
+const IMPL_DEF = /^[ \t]*impl(?:<[^>]+>)?\s+(?:[\w:]+\s+for\s+)?([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)/gm;
 
 /** use crate::module::Item; */
 const USE_STMT = /^[ \t]*use\s+([\w:{}*, ]+);/gm;
@@ -125,7 +125,7 @@ function parseParams(raw: string): string[] {
 
 function extractCalls(body: string, selfName: string): string[] {
   const calls = new Set<string>();
-  const pattern = /\b(\w+)\s*(?:::\s*\w+\s*)?\(/g;
+  const pattern = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*(?:::\s*\w+\s*)?\(/g;
   let m: RegExpExecArray | null;
   const SKIP = new Set(['if', 'for', 'while', 'loop', 'match', 'let', 'return', 'panic', 'vec', 'println', 'eprintln', selfName]);
   while ((m = pattern.exec(body)) !== null) {

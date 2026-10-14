@@ -3,10 +3,17 @@ import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from 
 import { calculateComplexity, extractIndentedBody } from './BaseParser.js';
 
 /** def method_name(params) or def method_name! or def method_name? */
-const METHOD_DEF = /^( *)def\s+([\w]+[?!]?)\s*(?:\(([^)]*)\))?/gm;
+// `[\w]` rather than `(\w+)` meant this one escaped the sweep that widened
+// every other parser's name capture. It was also the worst case of the bug:
+// `def crearé` captured `crear`, a name that is WRONG rather than merely
+// missing, and a wrong name can match some other method and manufacture a
+// false call-graph edge. Ruby allows non-ASCII identifiers, so these are real
+// definitions.
+const METHOD_DEF =
+  /^( *)def\s+([\wÀ-ɏͰ-ϿЀ-ӿ֐-׿؀-ۿऀ-ॿ一-鿿가-힯$]+[?!]?)\s*(?:\(([^)]*)\))?/gm;
 
-const CLASS_DEF = /^( *)class\s+(\w+)(?:\s*<\s*(\w+))?/gm;
-const MODULE_DEF = /^( *)module\s+(\w+)/gm;
+const CLASS_DEF = /^( *)class\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s*<\s*([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+))?/gm;
+const MODULE_DEF = /^( *)module\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)/gm;
 
 /** require 'file' or require_relative 'file' or require "file" */
 const REQUIRE_STMT = /^(?:require|require_relative|load)\s+['"]([^'"]+)['"]/gm;
@@ -109,7 +116,7 @@ function parseParams(raw: string): string[] {
 
 function extractCalls(body: string, selfName: string): string[] {
   const calls = new Set<string>();
-  const pattern = /\b(\w+)\s*[({]/g;
+  const pattern = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*[({]/g;
   let m: RegExpExecArray | null;
   const SKIP = new Set(['if', 'elsif', 'unless', 'while', 'until', 'for', 'rescue', 'begin', 'end', 'do', 'def', 'class', 'module', 'return', 'puts', 'p', 'pp', selfName]);
   while ((m = pattern.exec(body)) !== null) {

@@ -62,6 +62,18 @@ export function analyzeBlastRadius(
   };
 }
 
+/**
+ * Exported so that anything else answering "what does changing this function
+ * break" grades it on the same scale. The MCP server's function_blast_radius
+ * tool walks the stored call graph rather than calling analyzeBlastRadius
+ * (which needs the parsed FileAnalysis set, and RepoAnalysis does not retain
+ * it), so without sharing this the same function could come back "high" to a
+ * coding agent and "critical" on the website. Thresholds belong in one place.
+ */
+export function classifyBlastRadiusRisk(affectedFunctions: number, affectedFiles: number): RiskLevel {
+  return classifyRisk(affectedFunctions, affectedFiles);
+}
+
 function classifyRisk(affectedFunctions: number, affectedFiles: number): RiskLevel {
   if (affectedFunctions === 0) return 'low';
   if (affectedFunctions <= 5 && affectedFiles <= 2) return 'low';

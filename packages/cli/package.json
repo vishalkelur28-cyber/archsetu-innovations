@@ -1,8 +1,12 @@
 {
   "name": "@archsetuweb/cli",
-  "version": "0.1.16",
-  "description": "ArchSetu CLI - analyze any local codebase from the terminal",
+  "version": "0.1.22",
+  "mcpName": "io.github.vishalkelur28-cyber/archsetu",
+  "description": "MCP server and CLI that tells your coding agent what it is about to break: blast radius, dead code, and health for any local codebase. Runs entirely on your machine.",
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vishalkelur28-cyber/archsetu-innovations.git",
@@ -12,10 +16,18 @@
   "bugs": "https://github.com/vishalkelur28-cyber/archsetu-innovations/issues",
   "author": "ArchSetu",
   "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude-code",
+    "cursor",
+    "ai-agent",
     "static-analysis",
-    "cli",
     "code-analysis",
-    "codebase-health"
+    "call-graph",
+    "dead-code",
+    "codebase-health",
+    "cli"
   ],
   "bin": {
     "archsetu": "./dist/cli.mjs"
@@ -25,7 +37,8 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "vitest run"
   },
   "dependencies": {
     "chalk": "^5.3.0",
@@ -40,9 +53,12 @@
     "@archsetu/core": "workspace:*",
     "@types/node": "^20.14.0",
     "tsup": "^8.1.0",
-    "typescript": "^5.5.2"
+    "typescript": "^5.5.2",
+    "vitest": "^3.2.7"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   }

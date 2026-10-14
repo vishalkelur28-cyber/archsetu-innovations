@@ -6,13 +6,13 @@ import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
  * Method signature pattern for Java.
  * Captures: modifier list, return type, method name, parameter list.
  */
-const METHOD_DEF = /^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|default|strictfp)\s+)*(?:<[^>]+>\s+)?([\w$[\]<>.,? ]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s.]+)?\s*\{/gm;
+const METHOD_DEF = /^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|default|strictfp)\s+)*(?:<[^>]+>\s+)?([\w$[\]<>.,? ]+)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s.]+)?\s*\{/gm;
 
-const CLASS_DEF = /^\s*(?:(?:public|private|protected|abstract|final|static)\s+)*(?:class|interface|enum|record)\s+(\w+)(?:\s+extends\s+([\w<>., ]+))?(?:\s+implements\s+([\w<>., ]+))?\s*\{/gm;
+const CLASS_DEF = /^\s*(?:(?:public|private|protected|abstract|final|static)\s+)*(?:class|interface|enum|record)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s+extends\s+([\w<>., ]+))?(?:\s+implements\s+([\w<>., ]+))?\s*\{/gm;
 
 const IMPORT_STMT = /^import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/gm;
 
-const FUNC_CALL = /\b(\w+)\s*\(/g;
+const FUNC_CALL = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(/g;
 
 export const JavaParser: LanguageParser = {
   language: 'java',

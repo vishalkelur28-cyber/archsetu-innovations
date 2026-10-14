@@ -17,8 +17,14 @@ export { findDeadCode } from './analysis/DeadCodeFinder.js';
 export { buildCallGraph } from './analysis/CallGraphBuilder.js';
 export { detectEntryPointsFromAnalyses as detectEntryPoints } from './analysis/EntryPointDetector.js';
 export { analyzeComplexity } from './analysis/ComplexityAnalyzer.js';
-export { analyzeBlastRadius } from './analysis/BlastRadiusAnalyzer.js';
+export { analyzeBlastRadius, classifyBlastRadiusRisk } from './analysis/BlastRadiusAnalyzer.js';
 export { analyzeChangeImpact } from './analysis/ChangeImpactAnalyzer.js';
+// Exported alongside analyzeChangeImpact because a consumer that already
+// holds a RepoAnalysis has the reverse-dependency graph in hand
+// (changeImpactGraph) and should query it directly, rather than re-walking
+// every file's imports through analyzeChangeImpact just to rebuild the same
+// graph. The MCP server's blast_radius tool does exactly this on every call.
+export { computeImpactFromGraph } from './analysis/ChangeImpactAnalyzer.js';
 export { explainFile } from './analysis/FileExplainer.js';
 export { buildOnboardingGuide } from './analysis/OnboardingGuide.js';
 export { generatePrDescriptionDraft } from './analysis/PrDescriptionGenerator.js';

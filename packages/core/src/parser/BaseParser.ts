@@ -190,3 +190,47 @@ export function extractIndentedBody(
   const body = lines.slice(startLine, endLine + 1).join('\n');
   return { body, endLine };
 }
+
+/**
+ * Characters that may appear in an identifier, for the name-capturing regexes
+ * in the language parsers.
+ *
+ * `\w` is ASCII-only in JavaScript regex, so every parser built on it silently
+ * missed any function whose name is not spelled in ASCII. Measured across eight
+ * languages, nine of sixteen functions were found: `function crearé()` was
+ * invisible while `function normal()` beside it was fine. Ruby was worse than a
+ * miss - it captured `crearé` as `crear`, a WRONG name, which can then match
+ * some other function and create a false call-graph edge.
+ *
+ * Every language here permits non-ASCII identifiers, so these were real
+ * declarations being dropped: undercounted functions, and therefore wrong
+ * complexity, dead-code and health numbers, with no warning that anything had
+ * been skipped.
+ *
+ * The ranges are explicit rather than `\p{L}` with the `u` flag, because adding
+ * `u` to an existing pattern changes how several escapes are interpreted and
+ * would risk breaking regexes that work today. They cover Latin Extended,
+ * Greek, Cyrillic, Hebrew, Arabic, Devanagari and CJK, and deliberately stop
+ * short of the General Punctuation block so that a dash or quote next to a name
+ * is still a boundary rather than part of it.
+ */
+export const IDENT_CHARS = [
+  '\\w', // ASCII letters, digits, underscore - and `$` is added below for JS
+  '\\u00C0-\\u024F', // Latin-1 Supplement + Latin Extended-A/B: \u00E9, \u00F1, \u00F8, \u0142
+  '\\u0370-\\u03FF', // Greek
+  '\\u0400-\\u04FF', // Cyrillic
+  '\\u0590-\\u05FF', // Hebrew
+  '\\u0600-\\u06FF', // Arabic
+  '\\u0900-\\u097F', // Devanagari
+  '\\u4E00-\\u9FFF', // CJK Unified Ideographs
+  '\\uAC00-\\uD7AF', // Hangul syllables
+].join('');
+
+/**
+ * One or more identifier characters, as a regex source fragment.
+ *
+ * Includes `$` because JavaScript, TypeScript and PHP all allow it in a name;
+ * no other language here treats it as a letter, and in those it would be a
+ * boundary character anyway, so one shared fragment is safe.
+ */
+export const IDENT = `[${IDENT_CHARS}$]+`;

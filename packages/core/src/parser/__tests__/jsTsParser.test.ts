@@ -236,3 +236,90 @@ describe('JsTsParser - ES6 shorthand methods and property-arrow functions', () =
     expect(names).toContain('unusedHelper');
   });
 });
+
+/**
+ * Multi-line imports are the dominant form in real TypeScript, and the
+ * extraction regex used to be line-bounded, so none of these produced any
+ * import at all. See IMPORT_STMT's comment in JsTsParser for what that broke
+ * downstream.
+ */
+describe('JsTsParser multi-line imports', () => {
+  const parse = (source: string) => {
+    const result = parseFile(source, '/repo/src/a.ts');
+    if (!result) throw new Error('expected JsTsParser to handle this fixture');
+    return result;
+  };
+
+  it('extracts a braced import list spanning several lines', () => {
+    const result = parse(`
+import {
+  ErrorCode,
+  RpcError,
+  writeMessage,
+} from './jsonrpc.js';
+`);
+
+    expect(result.imports.map((i) => i.source)).toEqual(['./jsonrpc.js']);
+    expect(result.imports[0]?.symbols).toEqual(['ErrorCode', 'RpcError', 'writeMessage']);
+  });
+
+  it('strips an inline type modifier from a specifier name', () => {
+    const result = parse(`
+import {
+  readMessages,
+  type JsonRpcId,
+} from './jsonrpc.js';
+`);
+
+    expect(result.imports[0]?.symbols).toEqual(['readMessages', 'JsonRpcId']);
+  });
+
+  it('handles a default import alongside a multi-line braced list', () => {
+    const result = parse(`
+import Server, {
+  type Options,
+} from './server.js';
+`);
+
+    expect(result.imports.map((i) => i.source)).toEqual(['./server.js']);
+    expect(result.imports[0]?.symbols).toEqual(['Server', 'Options']);
+  });
+
+  /**
+   * The failure mode a greedy multi-line pattern would introduce: one import's
+   * specifier clause running forward into the next statement, collapsing two
+   * imports into one and losing an edge.
+   */
+  it('does not let one multi-line import swallow the next', () => {
+    const result = parse(`
+import {
+  a,
+} from './first.js';
+import {
+  b,
+} from './second.js';
+import plain from './third.js';
+`);
+
+    expect(result.imports.map((i) => i.source)).toEqual(['./first.js', './second.js', './third.js']);
+    expect(result.imports[0]?.symbols).toEqual(['a']);
+    expect(result.imports[1]?.symbols).toEqual(['b']);
+    expect(result.imports[2]?.symbols).toEqual(['plain']);
+  });
+
+  it('still handles single-line, namespace and side-effect imports', () => {
+    const result = parse(`
+import path from 'path';
+import * as fs from 'node:fs';
+import { join } from 'path/posix';
+import './polyfill.js';
+`);
+
+    expect(result.imports.map((i) => i.source)).toEqual([
+      'path',
+      'node:fs',
+      'path/posix',
+      './polyfill.js',
+    ]);
+  });
+});

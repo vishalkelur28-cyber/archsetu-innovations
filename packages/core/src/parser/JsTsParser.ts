@@ -5,13 +5,13 @@ import { calculateComplexity, extractFunctionBody, stripStringsAndComments } fro
 // ─── Patterns ────────────────────────────────────────────────────────────────
 
 /** Named function declarations: (export) (async) function name( */
-const FUNC_DECL = /^[ \t]*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+(\w+)\s*\(/m;
+const FUNC_DECL = /^[ \t]*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(/m;
 
 /** Arrow / regular functions assigned to const/let/var: (export) const name = (async) ( */
-const ARROW_FUNC = /^[ \t]*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>/m;
+const ARROW_FUNC = /^[ \t]*(?:export\s+)?(?:const|let|var)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>/m;
 
 /** Class method (may be preceded by access modifier, async, static, override, abstract) */
-const CLASS_METHOD = /^[ \t]+(?:(?:public|private|protected|static|async|override|abstract|readonly)\s+)*(\w+)\s*\([^)]*\)\s*(?::\s*[\w<>[\]|&?.,\s]+)?\s*\{/m;
+const CLASS_METHOD = /^[ \t]+(?:(?:public|private|protected|static|async|override|abstract|readonly)\s+)*([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\([^)]*\)\s*(?::\s*[\w<>[\]|&?.,\s]+)?\s*\{/m;
 
 /**
  * ES6 shorthand method syntax, in an object literal (`{ createSecret(dto) {
@@ -25,7 +25,7 @@ const CLASS_METHOD = /^[ \t]+(?:(?:public|private|protected|static|async|overrid
  * (if/for/while/switch/catch/else/do all share this identical `word (...) {`
  * shape as a control-flow statement, not a method definition).
  */
-const SHORTHAND_METHOD = /^[ \t]+(?:(?:public|private|protected|static|async|override|abstract|readonly|get|set)\s+)*(?:\*\s*)?([A-Za-z_$][\w$]*)\s*(?:<[^()]*>)?\s*\(([^)]*)\)\s*(?::\s*[\w<>[\]|&?.,\s]+)?\s*\{/m;
+const SHORTHAND_METHOD = /^[ \t]+(?:(?:public|private|protected|static|async|override|abstract|readonly|get|set)\s+)*(?:\*\s*)?([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*(?:<[^()]*>)?\s*\(([^)]*)\)\s*(?::\s*[\w<>[\]|&?.,\s]+)?\s*\{/m;
 
 /**
  * A property whose value is an arrow function (`{ createSecret: (dto) => {
@@ -36,13 +36,36 @@ const SHORTHAND_METHOD = /^[ \t]+(?:(?:public|private|protected|static|async|ove
  * function-type signature with no body (`bar: () => void;` in an interface),
  * which has the identical `name: (...) => ...` shape up to that point.
  */
-const PROPERTY_ARROW = /^[ \t]+['"]?([A-Za-z_$][\w$]*)['"]?\s*:\s*(?:async\s+)?(?:\(([^)]*)\)|([A-Za-z_$][\w$]*))\s*=>\s*\{/m;
+const PROPERTY_ARROW = /^[ \t]+['"]?([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)['"]?\s*:\s*(?:async\s+)?(?:\(([^)]*)\)|([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+))\s*=>\s*\{/m;
 
 /** Class declaration */
-const CLASS_DECL = /^[ \t]*(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>., ]+))?(?:\s+implements\s+([\w<>., ]+))?\s*\{/m;
+const CLASS_DECL = /^[ \t]*(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s+extends\s+([\w<>., ]+))?(?:\s+implements\s+([\w<>., ]+))?\s*\{/m;
 
 /**
  * ES module imports.
+ *
+ * The specifier clause has two alternatives, and the order matters. The first
+ * matches a braced named-import list and is the reason this regex is not
+ * simply line-bounded: a multi-line
+ *
+ *     import {
+ *       a,
+ *       b,
+ *     } from './x.js';
+ *
+ * is extremely common in real TypeScript, and because `.` does not match a
+ * newline, the previous single-line-only pattern silently extracted NO import
+ * at all from it. That was not a cosmetic gap - it dropped those edges from
+ * the import graph entirely, so blast radius and change impact under-reported
+ * coupling, and DependencyHygiene missed packages that were only ever imported
+ * this way. Found by asking for the blast radius of a file that two siblings
+ * demonstrably import and being told only one did.
+ *
+ * `[^{}]*` is what keeps the multi-line branch safe: it cannot cross its own
+ * closing brace, so the match is bounded by the import's own specifier list
+ * rather than running forward through unrelated code. The leading
+ * `[\w$*,\s]*` (for `import Default, { a } from 'x'`) likewise cannot cross a
+ * quote, so it can never swallow a following import statement.
  *
  * TODO(known false positive, out of scope for the monorepo/framework-convention
  * fixes): this has no awareness of template literals, so an `import ... from
@@ -51,10 +74,28 @@ const CLASS_DECL = /^[ \t]*(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+
  * liam-hq/liam (frontend/packages/schema/src/parser/drizzle/__tests__/unified.test.ts,
  * flagged "${config.imports.core}" as an undeclared package).
  */
-const IMPORT_STMT = /^[ \t]*import\s+(?:type\s+)?(?:(.+?)\s+from\s+)?['"](.*?)['"]/gm;
+const IMPORT_STMT =
+  /^[ \t]*import\s+(?:type\s+)?(?:((?:[\w$*,\s]*\{[^{}]*\})|.+?)\s+from\s+)?['"](.*?)['"]/gm;
+
+/**
+ * Re-exports: `export { a } from './x'`, `export * from './x'`,
+ * `export * as ns from './x'`, `export type { T } from './x'`.
+ *
+ * These are imports as far as the dependency graph is concerned - the module
+ * is loaded and the importing file depends on it - but they do not start with
+ * the word `import`, so IMPORT_STMT above never saw them. The effect was not
+ * subtle: a barrel file (`src/index.ts` doing nothing but
+ * `export { x } from './x'`, the dominant convention in TypeScript packages)
+ * contributed NO edges at all, so every module reachable only through the
+ * barrel looked like it had no importers. Blast-radius analysis then reported
+ * "nothing imports it" for load-bearing files, which is the one answer that
+ * makes someone delete or freely rewrite them.
+ */
+const REEXPORT_STMT =
+  /^[ \t]*export\s+(?:type\s+)?(\*(?:\s+as\s+[\w$]+)?|\{[^{}]*\})\s+from\s+['"]([^'"]+)['"]/gm;
 
 /** ES module exports */
-const EXPORT_DECL = /^[ \t]*export\s+(?:default\s+)?(?:function|class|const|let|var|type|interface|enum)\s+(\w+)/gm;
+const EXPORT_DECL = /^[ \t]*export\s+(?:default\s+)?(?:function|class|const|let|var|type|interface|enum)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)/gm;
 
 /** require() calls */
 const REQUIRE_STMT = /(?:const|let|var)\s+\{?([^}=]+)\}?\s*=\s*require\(['"]([^'"]+)['"]\)/gm;
@@ -67,20 +108,20 @@ const FUNC_CALL = /\b([\w$]+)\s*\(/g;
  * (a, name, b) / [a, name] / {a, name}, an assignment or property value
  * (x = name / key: name), or either branch of a ternary (cond ? name : other).
  */
-const REF_AS_VALUE = /[(,[{?:=]\s*([A-Za-z_$][\w$]*)\s*(?=[,)\]}:;\n])/g;
+const REF_AS_VALUE = /[(,[{?:=]\s*([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*(?=[,)\]}:;\n])/g;
 
 /** A name returned by value: return name; */
-const REF_AS_RETURN = /\breturn\s+([A-Za-z_$][\w$]*)\s*(?=[;,\n)}])/g;
+const REF_AS_RETURN = /\breturn\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*(?=[;,\n)}])/g;
 
 /**
  * A name immediately property-accessed: name.bind(...), name.cancel = ...,
  * Ctor.prototype = ... - accessing a property/method on a name necessarily
  * means the name itself is being used, not just declared.
  */
-const REF_AS_PROPERTY_ACCESS = /\b([A-Za-z_$][\w$]*)\s*\.\s*(?=[A-Za-z_$])/g;
+const REF_AS_PROPERTY_ACCESS = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\.\s*(?=[A-Za-z_$])/g;
 
 /** A name constructed without parens: new Ctor; (parenthesized `new Ctor(` is already caught by FUNC_CALL) */
-const REF_AS_NEW = /\bnew\s+([A-Za-z_$][\w$]*)\b/g;
+const REF_AS_NEW = /\bnew\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\b/g;
 
 /**
  * A React/JSX component used as a tag: <Home />, <Banner url={x}>, <Navbar/>.
@@ -130,6 +171,18 @@ export const JsTsParser: LanguageParser = {
       });
     }
 
+    const reexportPattern = new RegExp(REEXPORT_STMT.source, 'gm');
+    while ((m = reexportPattern.exec(content)) !== null) {
+      const source = m[2] ?? '';
+      imports.push({
+        source,
+        // `export * from` re-exports every name without listing one, so there
+        // are no symbols to record - the dependency edge is the whole point.
+        symbols: parseImportSpecifiers(m[1] ?? ''),
+        isRelative: source.startsWith('.'),
+      });
+    }
+
     const requirePattern = new RegExp(REQUIRE_STMT.source, 'gm');
     while ((m = requirePattern.exec(content)) !== null) {
       const names = (m[1] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -170,7 +223,7 @@ export const JsTsParser: LanguageParser = {
     // ── Functions ─────────────────────────────────────────────────────────────
     // Named function declarations
     const funcDeclPattern = new RegExp(
-      /^[ \t]*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/gm.source,
+      /^[ \t]*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)/gm.source,
       'gm',
     );
     while ((m = funcDeclPattern.exec(content)) !== null) {
@@ -207,7 +260,7 @@ export const JsTsParser: LanguageParser = {
 
     // Arrow functions / const assignments
     const arrowPattern = new RegExp(
-      /^[ \t]*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\(([^)]*)\)|(\w+))\s*=>/gm.source,
+      /^[ \t]*(?:export\s+)?(?:const|let|var)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*=\s*(?:async\s+)?(?:\(([^)]*)\)|([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+))\s*=>/gm.source,
       'gm',
     );
     while ((m = arrowPattern.exec(content)) !== null) {
@@ -381,7 +434,16 @@ function parseImportSpecifiers(specifiers: string): string[] {
     .replace(/\{([^}]*)\}/, '$1')
     .replace(/\*\s+as\s+\w+/, '')
     .split(',')
-    .map((s) => s.replace(/\s+as\s+\w+/, '').trim())
+    .map((s) =>
+      s
+        .replace(/\s+as\s+\w+/, '')
+        // An inline `import { type Foo, bar }` specifier is the symbol Foo,
+        // not a symbol literally named "type Foo" - which is what a plain
+        // trim would produce, and what anything matching symbol names
+        // against declared exports would then fail to find.
+        .replace(/^\s*type\s+/, '')
+        .trim(),
+    )
     .filter(Boolean);
 }
 
