@@ -25,17 +25,21 @@ const MAX_LISTED_FINDINGS = 10;
 const MAX_LISTED_CALLERS = 8;
 
 /**
- * Languages whose caller counts were checked by hand against real
- * repositories and found accurate - TypeScript (zod), Python (flask), Go
- * (pocketbase). Vue and Svelte go through the same parser as JavaScript.
+ * Languages whose caller counts were checked against real repositories and
+ * found accurate - TypeScript (zod), Python (flask), Go (pocketbase) by hand,
+ * Vue and Svelte through the JavaScript parser, and Java against javac's own
+ * resolution of every call in seven repositories (commons-lang, commons-io,
+ * commons-collections, gson, jsoup, TheAlgorithms, spring-petclinic): 91 to
+ * 100% of counted callers real, 97 to 100% of real callers counted. Java
+ * calls are linked by the receiver's type and the argument types, not the
+ * name (see TypedCallResolver).
  *
- * Everywhere else the counts are marked approximate. Measured on ripgrep and
- * commons-lang, a name-matched call graph cannot tell `.build()` on one type
- * from another, or one Java overload from the next: 68% of counted Rust
- * callers and 39% of Java ones were real. Methods-on-objects languages that
+ * Everywhere else the counts are marked approximate. Measured on ripgrep, a
+ * name-matched call graph cannot tell `.build()` on one type from another:
+ * 68% of counted Rust callers were real. Methods-on-objects languages that
  * were not measured (C#, Kotlin, Swift and the rest) are assumed no better.
  */
-const VERIFIED_CALLER_LANGUAGES: ReadonlySet<string> = new Set(['javascript', 'typescript', 'vue', 'svelte', 'python', 'go']);
+const VERIFIED_CALLER_LANGUAGES: ReadonlySet<string> = new Set(['javascript', 'typescript', 'vue', 'svelte', 'python', 'go', 'java']);
 
 const LANGUAGE_NAMES: Record<string, string> = {
   java: 'Java', rust: 'Rust', csharp: 'C#', kotlin: 'Kotlin', swift: 'Swift', scala: 'Scala', cpp: 'C++', c: 'C',

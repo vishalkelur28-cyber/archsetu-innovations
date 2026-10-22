@@ -167,6 +167,14 @@ const STANDARD_METHOD_NAMES = new Set([
   'contains', 'put', 'stream', 'collect', 'of', 'iterator', 'compareTo',
 ]);
 
+/**
+ * Languages whose calls CallGraphBuilder links by the receiver's type (see
+ * TypedCallResolver), so that an edge already names the one function a call
+ * reaches. Their callers are read straight off the edges; the name-matching
+ * guesses below are for languages linked by name alone.
+ */
+const TYPED_CALL_LANGUAGES: ReadonlySet<string> = new Set(['java']);
+
 interface NodePlace {
   file: string;
   dir: string;
@@ -201,6 +209,7 @@ export function reviewChanges(
   // show no callers at all - an under-count presented as "low risk" is the
   // one mistake a reviewer cannot see past.
   const callersByName = new Map<string, CallGraphNode[]>();
+  const callersById = new Map<string, CallGraphNode[]>();
   for (const edge of edges) {
     const target = nodeById.get(edge.target);
     const caller = nodeById.get(edge.source);
@@ -208,6 +217,9 @@ export function reviewChanges(
     const list = callersByName.get(target.name);
     if (list) list.push(caller);
     else callersByName.set(target.name, [caller]);
+    const byId = callersById.get(target.id);
+    if (byId) byId.push(caller);
+    else callersById.set(target.id, [caller]);
   }
 
   const declarationsByName = new Map<string, number>();
@@ -273,7 +285,9 @@ export function reviewChanges(
   const callersOf = (callee: CallGraphNode): CallGraphNode[] => {
     let list = visibleCallers.get(callee);
     if (!list) {
-      list = (callersByName.get(callee.name) ?? []).filter((c) => c !== callee && canSee(c, callee));
+      list = TYPED_CALL_LANGUAGES.has(callee.language)
+        ? (callersById.get(callee.id) ?? []).filter((c) => c !== callee)
+        : (callersByName.get(callee.name) ?? []).filter((c) => c !== callee && canSee(c, callee));
       visibleCallers.set(callee, list);
     }
     return list;

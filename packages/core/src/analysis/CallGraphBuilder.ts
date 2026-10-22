@@ -2,6 +2,7 @@ import type { FileAnalysis } from '../types/parser.types.js';
 import type { CallGraph, CallGraphEdge, CallGraphNode, DeadCodeResult } from '../types/analysis.types.js';
 import { findDeadCode } from './DeadCodeFinder.js';
 import { detectEntryPointsFromAnalyses } from './EntryPointDetector.js';
+import { TypedCallResolver } from './TypedCallResolver.js';
 
 /**
  * Builds a directed call graph from all parsed files.
@@ -58,16 +59,29 @@ export function buildCallGraph(
 
   // Build edges from calls lists
   const edgeSeen = new Set<string>();
+  const addEdge = (sourceId: string, targetId: string): void => {
+    const edgeKey = `${sourceId}→${targetId}`;
+    if (edgeSeen.has(edgeKey)) return;
+    edgeSeen.add(edgeKey);
+    edges.push({ id: edgeKey, source: sourceId, target: targetId });
+  };
+  // Where a parser types its call sites (Java), calls are looked up in the
+  // receiver's type and hierarchy instead; see TypedCallResolver.
+  const resolver = new TypedCallResolver(fileAnalyses);
   for (const file of fileAnalyses) {
     for (const fn of file.functions) {
       const sourceId = idOf(fn);
+      if (resolver.handles(fn)) {
+        for (const site of fn.callSites ?? []) {
+          const targets = resolver.resolve(fn, site) ?? resolver.soleDeclarations(site);
+          for (const target of targets) if (target !== fn) addEdge(sourceId, idOf(target));
+        }
+        continue;
+      }
       for (const callee of fn.calls) {
         const targetId = nodeIdMap.get(callee);
         if (!targetId) continue; // callee not found in repo
-        const edgeKey = `${sourceId}→${targetId}`;
-        if (edgeSeen.has(edgeKey)) continue;
-        edgeSeen.add(edgeKey);
-        edges.push({ id: edgeKey, source: sourceId, target: targetId });
+        addEdge(sourceId, targetId);
       }
     }
   }
