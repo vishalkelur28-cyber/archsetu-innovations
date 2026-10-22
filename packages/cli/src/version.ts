@@ -11,4 +11,4 @@
  * server reports it as its serverInfo.version, which is what a client
  * displays and what a bug report will quote.
  */
-export const CLI_VERSION = '0.1.22';
+export const CLI_VERSION = '0.1.23';

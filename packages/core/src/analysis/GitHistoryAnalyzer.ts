@@ -208,6 +208,29 @@ const GIT_LOG_TIMEOUT_MS = 60 * 1000;
  * exercised in a fast unit test instead of only being provable by actually
  * waiting 60 real seconds.
  */
+/**
+ * Settles with `work`, or rejects with `message` after `timeoutMs`.
+ *
+ * The timer is cleared as soon as either side settles. Left pending, it held
+ * the process open for the full timeout after the analysis had finished, so
+ * `archsetu analyze` took 91 seconds on a repository it analysed in half a
+ * second - every CLI run, every GitHub Actions `submit`. The hosted worker
+ * exits explicitly and never noticed.
+ */
+export async function raceWithTimeout<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function analyzeGitHistory(rootDir: string, timeoutMs = GIT_LOG_TIMEOUT_MS): Promise<GitHistoryResult | null> {
   try {
     const git = simpleGit(rootDir);
@@ -228,12 +251,7 @@ export async function analyzeGitHistory(rootDir: string, timeoutMs = GIT_LOG_TIM
     // shallow clone is a bounded, small amount of leaked work, not a
     // resource leak that compounds - a deliberately accepted tradeoff over
     // the much worse status quo of the entire job hanging for 15 minutes.
-    const raw = await Promise.race([
-      rawPromise,
-      new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`git log timed out after ${timeoutMs / 1000}s`)), timeoutMs);
-      }),
-    ]);
+    const raw = await raceWithTimeout(rawPromise, timeoutMs, `git log timed out after ${timeoutMs / 1000}s`);
 
     const touches = parseGitLogOutput(raw);
     if (touches.length === 0) return null;

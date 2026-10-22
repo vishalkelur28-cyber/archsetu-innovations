@@ -3,7 +3,7 @@ import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from 
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 
 /** function name(params) visibility modifiers returns (...) { */
-const FUNC_DEF = /^\s*function\s+(\w+)\s*\(([^)]*)\)([^{;]*)\{/gm;
+const FUNC_DEF = /^[ \t]*function\s+(\w+)\s*\(([^)]*)\)([^{;]*)\{/gm;
 
 /** contract Name { / interface Name { / library Name { / abstract contract Name { */
 const CONTRACT_DEF = /^(?:abstract\s+)?(?:contract|interface|library)\s+(\w+)(?:\s+is\s+[\w, ]+)?\s*\{/gm;

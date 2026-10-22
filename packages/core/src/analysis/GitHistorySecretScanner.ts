@@ -1,7 +1,7 @@
 import { simpleGit } from 'simple-git';
 import type { GitHistorySecretScanResult, HistoricalSecretFinding } from '../types/analysis.types.js';
 import { matchSecretInLine } from './SecurityRiskAnalyzer.js';
-import { GIT_HISTORY_MAX_COMMITS } from './GitHistoryAnalyzer.js';
+import { GIT_HISTORY_MAX_COMMITS, raceWithTimeout } from './GitHistoryAnalyzer.js';
 import { isTestFile } from '../utils/fileUtils.js';
 
 /**
@@ -123,12 +123,7 @@ export async function scanGitHistoryForSecrets(
     // Same Promise.race caveat as analyzeGitHistory: this abandons waiting on
     // rawPromise, it does not cancel the underlying git subprocess. See that
     // function's own comment for why this is an accepted tradeoff.
-    const raw = await Promise.race([
-      rawPromise,
-      new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`git log -p timed out after ${timeoutMs / 1000}s`)), timeoutMs);
-      }),
-    ]);
+    const raw = await raceWithTimeout(rawPromise, timeoutMs, `git log -p timed out after ${timeoutMs / 1000}s`);
 
     const rows = parseGitLogPatchOutput(raw);
     if (rows.length === 0) return null;

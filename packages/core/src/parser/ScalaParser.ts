@@ -1,9 +1,9 @@
 import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
-import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
+import { calculateComplexity, extractExpressionBody, extractFunctionBody } from './BaseParser.js';
 
-const FUNC_DEF = /^\s*(?:(?:def|val|var)\s+)(\w+)\s*(?:\[[^\]]*\])?\s*\(([^)]*)\)/gm;
-const CLASS_DEF = /^\s*(?:(?:abstract|sealed|final|case|implicit)\s+)*(?:class|object|trait)\s+(\w+)/gm;
+const FUNC_DEF = /^[ \t]*(?:(?:def|val|var)\s+)(\w+)\s*(?:\[[^\]]*\])?\s*\(([^)]*)\)/gm;
+const CLASS_DEF = /^[ \t]*(?:(?:abstract|sealed|final|case|implicit)\s+)*(?:class|object|trait)\s+(\w+)/gm;
 const IMPORT_STMT = /^import\s+([\w.{}*, ]+)/gm;
 
 export const ScalaParser: LanguageParser = {
@@ -40,7 +40,11 @@ export const ScalaParser: LanguageParser = {
       const name = m[1]; if (!name) continue;
       const startLine = linesBefore(content, m.index) + 1;
       const params = parseParams(m[2] ?? '');
-      const { body, endLine } = extractFunctionBody(lines, startLine - 1);
+      // `def area(): Double = w * h` has no braces of its own; `= {` does.
+      const isExpressionBody = /^\s*(?::[^={\n]+)?=\s*(?!\{|\s)/.test(content.slice(m.index + m[0].length));
+      const { body, endLine } = isExpressionBody
+        ? extractExpressionBody(lines, startLine - 1)
+        : extractFunctionBody(lines, startLine - 1);
       const calls = extractCalls(body, name);
       const prefix = content.slice(Math.max(0, m.index - 5), m.index + 20);
 

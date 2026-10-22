@@ -28,6 +28,7 @@ export { computeImpactFromGraph } from './analysis/ChangeImpactAnalyzer.js';
 export { explainFile } from './analysis/FileExplainer.js';
 export { buildOnboardingGuide } from './analysis/OnboardingGuide.js';
 export { generatePrDescriptionDraft } from './analysis/PrDescriptionGenerator.js';
+export { reviewChanges, CALLER_LIST_LIMIT, REACH_DEPTH, REACH_LIMIT } from './analysis/ChangeReview.js';
 export { compareAnalyses } from './analysis/AnalysisComparator.js';
 export { checkDependencyHygiene } from './analysis/DependencyHygiene.js';
 export { analyzeGitHistory, GIT_HISTORY_MAX_COMMITS } from './analysis/GitHistoryAnalyzer.js';
@@ -93,6 +94,7 @@ export type {
 
 export type { ChangedFunctionSummary, PrDescriptionDraft } from './analysis/PrDescriptionGenerator.js';
 export type { AnalysisDiff } from './analysis/AnalysisComparator.js';
+export type { CallerRef, ChangeReview, ChangedFile, ChangedFunction, LineRange, NewUndeclaredImport, ReviewOptions } from './analysis/ChangeReview.js';
 export type { MonorepoInfo, DeclaredDependencySource } from './utils/monorepoUtils.js';
 export type { TsAliasSource } from './utils/tsconfigUtils.js';
 export type { FrameworkConvention } from './analysis/FrameworkConventions.js';

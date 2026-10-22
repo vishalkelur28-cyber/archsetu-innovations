@@ -8,6 +8,7 @@
  *   archsetu analyze --json ./path/to/repo
  *   archsetu health ./path/to/repo
  *   archsetu dead-code ./path/to/repo
+ *   archsetu review --base origin/main
  *   archsetu install-hook --min-score 60
  *   archsetu uninstall-hook
  *   archsetu mcp
@@ -22,10 +23,22 @@ import {
   analyzeRepo,
   calculateHealthScore,
   findDeadCode,
+  reviewChanges,
   walkRepo,
   gzipJsonStringify,
   writeJsonToStdout,
 } from '@archsetu/core';
+import {
+  REVIEW_CHECKS,
+  ReviewError,
+  collectChanges,
+  failedChecks,
+  parseChecks,
+  renderMarkdown,
+  renderText,
+  reviewToJson,
+  scanChangedFiles,
+} from './review.js';
 import { checkDependencyVulnerabilities } from './osv.js';
 import { runMcpServer } from './mcp/server.js';
 import { runSelfCheck } from './mcp/selfCheck.js';
@@ -269,7 +282,8 @@ program
       .map((f) => parseFile(f.content, f.filePath))
       .filter(Boolean);
 
-    const dead = findDeadCode(analyses as Parameters<typeof findDeadCode>[0]);
+    const contents = new Map(walked.map((f) => [f.filePath, f.content]));
+    const dead = findDeadCode(analyses as Parameters<typeof findDeadCode>[0], contents);
 
     if (opts.json) {
       await writeJsonToStdout(dead);
@@ -286,6 +300,77 @@ program
       const safe = d.isSafeToRemove ? chalk.green(' ✓') : '';
       console.log(`${short}:${d.function.startLine}\t${d.function.name}${safe}`);
     });
+  });
+
+// ─── review ───────────────────────────────────────────────────────────────────
+/**
+ * The pull-request view: only what a change touched, never the repository's
+ * old debt. Exit codes are distinct so CI can tell a finding from a crash:
+ * 1 means a --fail-on check found something, 2 means the review could not
+ * run at all.
+ */
+// Same reasoning as SUBMIT_DEFAULT_MAX_FILES below: this runs on the caller's
+// machine or CI runner, not on ArchSetu's memory-constrained worker.
+const REVIEW_DEFAULT_MAX_FILES = 100_000;
+
+program
+  .command('review [dir]')
+  .description('Show what your changes touch: the functions they change, what depends on them, and what they add that needs a look')
+  .requiredOption('--base <ref>', 'Branch or commit to compare against, e.g. origin/main')
+  .option('--json', 'Output as JSON')
+  .option('--markdown', 'Output as Markdown, as posted on a pull request')
+  .option('--out <file>', 'Write the output to a file instead of stdout')
+  .option('--fail-on <checks>', `Exit with code 1 if the changes add any of: ${REVIEW_CHECKS.join(', ')} (comma-separated)`)
+  .option('--max-files <n>', 'Maximum files to analyze', String(REVIEW_DEFAULT_MAX_FILES))
+  // A usage mistake - a missing --base, an unknown flag - is "could not run",
+  // not "a check found something"; commander's own exit code for it is 1.
+  .exitOverride((err) => process.exit(err.exitCode === 0 ? 0 : 2))
+  .action(async (
+    dir: string | undefined,
+    opts: { base: string; json?: boolean; markdown?: boolean; out?: string; failOn?: string; maxFiles: string },
+  ) => {
+    const scopeDir = path.resolve(dir ?? '.');
+    const quiet = opts.json || opts.markdown || Boolean(opts.out);
+    const spinner = quiet ? null : ora(`Reviewing changes against ${opts.base}...`).start();
+
+    let failed: ReturnType<typeof failedChecks>;
+    try {
+      const checks = parseChecks(opts.failOn);
+      const maxFiles = Number(opts.maxFiles);
+      if (!Number.isInteger(maxFiles) || maxFiles < 1) {
+        throw new ReviewError(`--max-files must be a whole number above 0, not "${opts.maxFiles}".`);
+      }
+      const out = opts.out ? path.resolve(opts.out) : undefined;
+      const changes = collectChanges(scopeDir, opts.base, { exclude: out ? [out] : [] });
+      // The whole repository, not just the directory reviewed: callers and
+      // package.json files outside it still decide what the change reaches.
+      const analysis = await analyzeRepo(changes.gitRoot, { maxFiles, uncapped: true });
+      const review = reviewChanges(analysis, changes.files, {
+        securityFindings: scanChangedFiles(changes.gitRoot, changes.files),
+      });
+      failed = failedChecks(review, checks);
+      const ctx = {
+        gitRoot: changes.gitRoot, base: opts.base, comparedWith: changes.comparedWith,
+        version: CLI_VERSION, failed, warnings: changes.warnings,
+      };
+
+      const output = opts.json
+        ? JSON.stringify(reviewToJson(review, ctx), null, 2)
+        : opts.markdown
+          ? renderMarkdown(review, ctx)
+          : renderText(review, ctx, chalk);
+      spinner?.stop();
+      if (out) fs.writeFileSync(out, output, 'utf8');
+      else console.log(output);
+      // stderr, so a reader of --json or --markdown on stdout still sees them.
+      if (quiet) for (const w of changes.warnings) console.error(chalk.yellow(`Warning: ${w}`));
+    } catch (err) {
+      spinner?.fail('Review failed');
+      console.error(chalk.red(err instanceof ReviewError ? err.message : (err as Error).stack ?? String(err)));
+      process.exit(2);
+    }
+
+    if (failed.length > 0) process.exitCode = 1;
   });
 
 // ─── submit ───────────────────────────────────────────────────────────────────

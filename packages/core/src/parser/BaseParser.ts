@@ -150,9 +150,13 @@ export function extractFunctionBody(
   let depth = 0;
   let started = false;
   let endLine = startLine;
+  const signatureEnd = openChar === '{' ? endOfMultiLineSignature(lines, startLine) : null;
+  let i = signatureEnd?.line ?? startLine;
+  let from = signatureEnd?.column ?? 0;
 
-  for (let i = startLine; i < lines.length; i++) {
-    const line = lines[i] ?? '';
+  for (; i < lines.length; i++) {
+    const line = (lines[i] ?? '').slice(from);
+    from = 0;
     for (const ch of line) {
       if (ch === openChar) { depth++; started = true; }
       if (ch === closeChar) { depth--; }
@@ -168,18 +172,129 @@ export function extractFunctionBody(
 }
 
 /**
+ * Where a parameter list written over several lines closes, so the body's
+ * braces are counted from there and not from the types and defaults inside it.
+ * Counting those ended the function at its first brace-balanced parameter line
+ * - `options: { maxFiles?: number } = {},` - recording it as its own header
+ * and losing every call in its body. That is what Prettier makes of any long
+ * TypeScript signature; analyzeRepo itself came out as three lines calling
+ * `string` and `number`.
+ *
+ * Only a first line that leaves a parenthesis open and no brace open counts.
+ * A line like `hash(opts, function (err) {` - a call with a callback, which
+ * the JS patterns also report as a function - opens its brace on that line
+ * and keeps the plain counting it always had.
+ */
+function endOfMultiLineSignature(lines: string[], startLine: number): { line: number; column: number } | null {
+  let parens = 0;
+  let braces = 0;
+  for (const ch of lines[startLine] ?? '') {
+    if (ch === '(') parens++;
+    else if (ch === ')') parens--;
+    else if (ch === '{') braces++;
+    else if (ch === '}') braces--;
+  }
+  if (parens <= 0 || braces !== 0) return null;
+
+  for (let i = startLine + 1; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    for (let c = 0; c < line.length; c++) {
+      if (line[c] === '(') parens++;
+      else if (line[c] === ')' && --parens === 0) {
+        return opensBody(lines, i, c + 1) ? { line: i, column: c + 1 } : null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether what follows a closing parenthesis leads into a body - `{`, `=>`, a
+ * return type, Rust's `where` - rather than ending a call. The function
+ * patterns also match calls spread over several lines whose callback opens a
+ * brace inside the parentheses (`it(\n 'name',\n function () {`, Dart's
+ * `ElevatedButton(\n onPressed: () {`); after their closing `)` comes `;`,
+ * `,` or `)`, and those keep the plain counting they always had.
+ */
+function opensBody(lines: string[], line: number, column: number): boolean {
+  let depth = 0;
+  for (let i = line; i < lines.length && i < line + 10; i++) {
+    const text = lines[i] ?? '';
+    for (let c = i === line ? column : 0; c < text.length; c++) {
+      const ch = text[c];
+      const next = text[c + 1];
+      if (ch === '=' && next === '>') return true;
+      if (ch === '-' && next === '>') { c++; continue; }
+      if (depth <= 0 && /^where\b/.test(text.slice(c))) return true;
+      if (ch === '<' || ch === '(' || ch === '[') depth++;
+      else if (ch === '>' || ch === ']') depth--;
+      else if (ch === ')') { if (depth <= 0) return false; depth--; }
+      else if (ch === '{' && depth <= 0) return true;
+      else if ((ch === ';' || ch === ',') && depth <= 0) return false;
+    }
+  }
+  return false;
+}
+
+/** A line ending this way carries its expression onto the next line. */
+const CONTINUES_AT_END = /(?:=>|[=+\-*/%&|?:.(]|&&|\|\||\?\?)$/;
+/** A line starting this way continues the expression on the line before it. */
+const CONTINUES_AT_START = /^(?:\?\.|\.|&&|\|\||\?\?|\?|:|\+|=>)/;
+
+/**
+ * Extracts the body of an expression-bodied function, which has no braces of
+ * its own: `const f = (x) => x * 2;`, Kotlin `fun isEmpty() = size == 0`,
+ * Scala `def area = w * h`. It ends at the first line where brackets are
+ * balanced and the expression visibly does not continue.
+ *
+ * extractFunctionBody would instead run on to the next `{...}` block in the
+ * file - usually the next function - and credit this one with that
+ * function's lines, branches and calls. Infisical's one-line
+ * `hostnameFromCacheKey` arrow swallowed the function below it, including
+ * the only line that used it.
+ */
+export function extractExpressionBody(
+  lines: string[],
+  startLine: number, // 0-indexed
+): { body: string; endLine: number } {
+  let depth = 0;
+  let endLine = startLine;
+  for (let i = startLine; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    for (const ch of line) {
+      if (ch === '(' || ch === '[' || ch === '{') depth++;
+      else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    }
+    endLine = i;
+    if (depth > 0) continue;
+    // A trailing `// note` must not read as a continuing `/` operator.
+    const code = line.replace(/\s\/\/.*$/, '').trimEnd();
+    if (code.endsWith(';')) break;
+    if (CONTINUES_AT_END.test(code)) continue;
+    const next = lines.slice(i + 1, i + 20).find((l) => l.trim() !== '')?.trimStart() ?? '';
+    if (!CONTINUES_AT_START.test(next)) break;
+  }
+  return { body: lines.slice(startLine, endLine + 1).join('\n'), endLine };
+}
+
+/**
  * Extracts function body for indent-based languages (Python, Ruby, YAML, etc.).
  * Collects all lines that are indented more than the header line.
+ *
+ * `headerEndLine` is the last line of a header written over several lines - a
+ * Python signature's `) -> X:` sits at the def's own indentation, and scanning
+ * from the def line stopped there, cutting the function off before its body.
  */
 export function extractIndentedBody(
   lines: string[],
   startLine: number, // 0-indexed - the def/class header line
+  headerEndLine = startLine, // 0-indexed
 ): { body: string; endLine: number } {
   const header = lines[startLine] ?? '';
   const baseIndent = header.length - header.trimStart().length;
-  let endLine = startLine;
+  let endLine = headerEndLine;
 
-  for (let i = startLine + 1; i < lines.length; i++) {
+  for (let i = headerEndLine + 1; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (line.trim() === '') { endLine = i; continue; } // blank lines inside body
     const indent = line.length - line.trimStart().length;

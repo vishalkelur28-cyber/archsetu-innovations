@@ -3,7 +3,7 @@ import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from 
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 
 /** def name(params) { or ReturnType name(params) { - Groovy allows both dynamic (def) and typed method declarations */
-const FUNC_DEF = /^\s*(?:(?:public|private|protected|static)\s+)*(?:def|[\w<>[\],. ]+?)\s+(\w+)\s*\(([^)]*)\)\s*\{/gm;
+const FUNC_DEF = /^[ \t]*(?:(?:public|private|protected|static)\s+)*(?:def|[\w<>[\],. ]+?)\s+(\w+)\s*\(([^)]*)\)\s*\{/gm;
 
 /** class Name { or class Name extends Base { */
 const CLASS_DEF = /^(?:public\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?/gm;

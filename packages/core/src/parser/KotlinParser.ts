@@ -1,11 +1,11 @@
 import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
-import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
+import { calculateComplexity, extractExpressionBody, extractFunctionBody } from './BaseParser.js';
 
 /** fun funcName(params): ReturnType { */
-const FUNC_DEF = /^\s*(?:(?:public|private|protected|internal|open|final|abstract|override|inline|suspend|tailrec|operator|infix|external)\s+)*fun\s+(?:<[^>]*>\s+)?(\w+)\s*\(([^)]*)\)/gm;
+const FUNC_DEF = /^[ \t]*(?:(?:public|private|protected|internal|open|final|abstract|override|inline|suspend|tailrec|operator|infix|external)\s+)*fun\s+(?:<[^>]*>\s+)?(\w+)\s*\(([^)]*)\)/gm;
 
-const CLASS_DEF = /^\s*(?:(?:public|private|protected|internal|abstract|sealed|open|data|enum|value|inner|companion)\s+)*(?:class|object|interface)\s+(\w+)/gm;
+const CLASS_DEF = /^[ \t]*(?:(?:public|private|protected|internal|abstract|sealed|open|data|enum|value|inner|companion)\s+)*(?:class|object|interface)\s+(\w+)/gm;
 
 const IMPORT_STMT = /^import\s+([\w.]+(?:\.\*)?)/gm;
 
@@ -50,7 +50,11 @@ export const KotlinParser: LanguageParser = {
       const isAsync = prefix.includes('suspend');
       if (isExported) exports.push(name);
       const params = parseParams(m[2] ?? '');
-      const { body, endLine } = extractFunctionBody(lines, startLine - 1);
+      // `fun isEmpty() = size == 0` / `fun f(): Int = 1` has no braces of its own.
+      const isExpressionBody = /^\s*(?::[^={\n]+)?=(?!=)/.test(content.slice(m.index + m[0].length));
+      const { body, endLine } = isExpressionBody
+        ? extractExpressionBody(lines, startLine - 1)
+        : extractFunctionBody(lines, startLine - 1);
       const calls = extractCalls(body, name);
 
       functions.push({

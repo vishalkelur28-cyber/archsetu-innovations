@@ -2,9 +2,9 @@ import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 
-const FUNC_DEF = /^\s*(?:(?:public|private|internal|fileprivate|open|static|class|override|final|mutating|nonmutating|required|convenience|lazy|weak)\s+)*(?:async\s+)?func\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/gm;
+const FUNC_DEF = /^[ \t]*(?:(?:public|private|internal|fileprivate|open|static|class|override|final|mutating|nonmutating|required|convenience|lazy|weak)\s+)*(?:async\s+)?func\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/gm;
 
-const CLASS_DEF = /^\s*(?:(?:public|private|internal|open|final)\s+)*(?:class|struct|enum|protocol|actor)\s+(\w+)/gm;
+const CLASS_DEF = /^[ \t]*(?:(?:public|private|internal|open|final)\s+)*(?:class|struct|enum|protocol|actor)\s+(\w+)/gm;
 
 const IMPORT_STMT = /^import\s+(\w[\w.]*)/gm;
 

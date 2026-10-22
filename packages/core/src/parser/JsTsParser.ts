@@ -1,8 +1,14 @@
 import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport, ParsedClass, SupportedLanguage } from '../types/parser.types.js';
-import { calculateComplexity, extractFunctionBody, stripStringsAndComments } from './BaseParser.js';
+import { IDENT, calculateComplexity, extractExpressionBody, extractFunctionBody, stripStringsAndComments } from './BaseParser.js';
 
 // ─── Patterns ────────────────────────────────────────────────────────────────
+
+/** TypeScript type parameters, `<T>` to `<T extends Record<K, Array<V>>>`: three levels of nesting. */
+const TYPE_PARAMS = '<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>';
+
+/** What follows a declaration's parameters when it has no body: an optional return type, then `;`. */
+const BODILESS_SIGNATURE_END = /^\s*(?::[^{;=]*)?;/;
 
 /** Named function declarations: (export) (async) function name( */
 const FUNC_DECL = /^[ \t]*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(/m;
@@ -203,9 +209,11 @@ export const JsTsParser: LanguageParser = {
       if (!className) continue;
       const startLine = linesBefore(content, m.index) + 1;
       const { endLine } = extractFunctionBody(lines, startLine - 1);
-      const isExported =
-        content.slice(Math.max(0, m.index - 20), m.index).includes('export') ||
-        isTrailingExported(content, className);
+      // The match starts at the line, so an inline `export` is inside m[0].
+      // This used to look at the 20 characters BEFORE the match, which made
+      // `export class Foo` exported only when the previous line happened to
+      // contain the word "export".
+      const isExported = /^[ \t]*export\s/.test(m[0]) || isTrailingExported(content, className);
       const extendsName = m[2]?.trim();
       const implementsNames = m[3]?.split(',').map((s) => s.trim());
       classes.push({
@@ -222,13 +230,20 @@ export const JsTsParser: LanguageParser = {
 
     // ── Functions ─────────────────────────────────────────────────────────────
     // Named function declarations
+    // TYPE_PARAMS lets a generic declaration through - `function f<T>(` was
+    // invisible, which was 120 of zod's core functions.
     const funcDeclPattern = new RegExp(
-      /^[ \t]*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)/gm.source,
+      `^[ \\t]*(?:export\\s+(?:default\\s+)?)?(?:async\\s+)?function(?:\\s*\\*\\s*|\\s+)(${IDENT})\\s*(?:${TYPE_PARAMS}\\s*)?\\(([^)]*)\\)`,
       'gm',
     );
     while ((m = funcDeclPattern.exec(content)) !== null) {
       const name = m[1];
       if (!name) continue;
+      // An overload signature (`function f(a: string): string;`) or a
+      // `declare function` has no body of its own, and taking one from the
+      // next `{` credited it with the implementation's - every call in it
+      // drawn a second and third time, from lines that call nothing.
+      if (BODILESS_SIGNATURE_END.test(content.slice(m.index + m[0].length, m.index + m[0].length + 300))) continue;
       const startLine = linesBefore(content, m.index) + 1;
       const isAsync = content.slice(m.index, m.index + 30).includes('async');
       const isExported =
@@ -259,8 +274,14 @@ export const JsTsParser: LanguageParser = {
     }
 
     // Arrow functions / const assignments
+    // Also takes the TypeScript forms that used to hide a function entirely: a
+    // typed const (`const f: Handler = (req) => {`), type parameters
+    // (`const f = <T,>(x: T) =>`) and a return type (`(x): string =>`). Both
+    // annotations stay on one line, so the pattern cannot wander into the
+    // next statement.
     const arrowPattern = new RegExp(
-      /^[ \t]*(?:export\s+)?(?:const|let|var)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*=\s*(?:async\s+)?(?:\(([^)]*)\)|([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+))\s*=>/gm.source,
+      `^[ \\t]*(?:export\\s+)?(?:const|let|var)\\s+(${IDENT})\\s*(?::(?:[^=;\\n]|=>)+?)?=\\s*(?:async\\s+)?` +
+        `(?:${TYPE_PARAMS}\\s*)?(?:\\(([^)]*)\\)|(${IDENT}))\\s*(?::[^=;\\n]+?)?=>`,
       'gm',
     );
     while ((m = arrowPattern.exec(content)) !== null) {
@@ -279,7 +300,11 @@ export const JsTsParser: LanguageParser = {
         'm',
       ).test(content);
       const params = parseParams(m[2] ?? m[3] ?? '');
-      const { body, endLine } = extractFunctionBody(lines, startLine - 1);
+      // `=> {` has a block body; anything else after `=>` is a single expression.
+      const hasBlockBody = /^\s*\{/.test(content.slice(m.index + m[0].length));
+      const { body, endLine } = hasBlockBody
+        ? extractFunctionBody(lines, startLine - 1)
+        : extractExpressionBody(lines, startLine - 1);
       const calls = extractCalls(body, name);
       functions.push({
         name,
@@ -296,6 +321,19 @@ export const JsTsParser: LanguageParser = {
         language,
       });
     }
+
+    // A method declared directly in an exported class's body is public API
+    // unless marked private or protected - the same rule as an exported
+    // top-level function. Treating every method as private reported all 30
+    // of appwrite's "safe to remove" findings, every one a method of its
+    // published SDK classes (public/sdk-console/services/*.ts).
+    const isPublicMemberOfExportedClass = (startLine: number, declaration: string): boolean => {
+      if (/\b(?:private|protected)\s/.test(declaration)) return false;
+      const owner = classes.find((c) => c.isExported && startLine > c.startLine && startLine < c.endLine);
+      if (!owner) return false;
+      const firstMember = lines.slice(owner.startLine).find((l) => l.trim() !== '') ?? '';
+      return indentOf(lines[startLine - 1] ?? '') === indentOf(firstMember);
+    };
 
     // Object-literal / class shorthand methods: name(params) { ... }
     const shorthandPattern = new RegExp(SHORTHAND_METHOD.source, 'gm');
@@ -315,7 +353,7 @@ export const JsTsParser: LanguageParser = {
         startLine,
         endLine: endLine + 1,
         parameters: params,
-        isExported: false, // an object-literal/class method isn't independently "exported" the way a top-level declaration is
+        isExported: isPublicMemberOfExportedClass(startLine, m[0]),
         isAsync,
         calls,
         complexity: calculateComplexity(body),
@@ -395,6 +433,10 @@ export const JsTsParser: LanguageParser = {
 
 function linesBefore(content: string, index: number): number {
   return content.slice(0, index).split('\n').length - 1;
+}
+
+function indentOf(line: string): number {
+  return line.length - line.trimStart().length;
 }
 
 /** Recomputes `fn`'s complexity from only the lines that don't belong to any

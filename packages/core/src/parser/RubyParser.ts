@@ -9,8 +9,18 @@ import { calculateComplexity, extractIndentedBody } from './BaseParser.js';
 // missing, and a wrong name can match some other method and manufacture a
 // false call-graph edge. Ruby allows non-ASCII identifiers, so these are real
 // definitions.
+//
+// `(?:self\.)?` skips the receiver of a class method. Without it every
+// `def self.helper` was recorded as a method named `self` - 76 of them in
+// sinatra - and the real name was lost. The optional visibility prefix admits
+// `private def helper`, which was not recognised as a method at all; it must
+// share the def's line; otherwise a bare `private` line followed by a def
+// reads as one declaration starting on the `private` line.
 const METHOD_DEF =
-  /^( *)def\s+([\wÀ-ɏͰ-ϿЀ-ӿ֐-׿؀-ۿऀ-ॿ一-鿿가-힯$]+[?!]?)\s*(?:\(([^)]*)\))?/gm;
+  /^( *)(?:(?:private|protected|public)[ \t]+)?def[ \t]+(?:self\.)?([\wÀ-ɏͰ-ϿЀ-ӿ֐-׿؀-ۿऀ-ॿ一-鿿가-힯$]+[?!]?)\s*(?:\(([^)]*)\))?/gm;
+
+/** `private :a, :b` / `private_class_method :a` - visibility given by name. */
+const VISIBILITY_BY_NAME = /^\s*(?:private|protected|private_class_method)\s+((?::[\w?!]+\s*,?\s*)+)/gm;
 
 const CLASS_DEF = /^( *)class\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s*<\s*([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+))?/gm;
 const MODULE_DEF = /^( *)module\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)/gm;
@@ -60,6 +70,11 @@ export const RubyParser: LanguageParser = {
     }
 
     // ── Methods ───────────────────────────────────────────────────────────────
+    const privateByName = new Set<string>();
+    for (const v of content.matchAll(VISIBILITY_BY_NAME)) {
+      for (const sym of (v[1] ?? '').matchAll(/:([\w?!]+)/g)) if (sym[1]) privateByName.add(sym[1]);
+    }
+
     const methodPattern = new RegExp(METHOD_DEF.source, 'gm');
     while ((m = methodPattern.exec(content)) !== null) {
       const indent = (m[1] ?? '').length;
@@ -69,7 +84,10 @@ export const RubyParser: LanguageParser = {
       const params = parseParams(m[3] ?? '');
       const { body, endLine } = extractIndentedBody(lines, startLine - 1);
       const calls = extractCalls(body, name);
-      const isTopLevel = indent === 0;
+      const isPrivate =
+        /^\s*(?:private|protected)\s/.test(m[0]) ||
+        privateByName.has(name) ||
+        underVisibilitySection(lines, startLine - 1, indent);
 
       functions.push({
         name,
@@ -77,7 +95,11 @@ export const RubyParser: LanguageParser = {
         startLine,
         endLine: endLine + 1,
         parameters: params,
-        isExported: isTopLevel && !name.startsWith('_'),
+        // Ruby methods are public unless declared otherwise, so a class's
+        // methods are its API exactly like top-level ones. Marking every
+        // indented method private reported 349 of sinatra's - most of its
+        // DSL - as safe to delete.
+        isExported: !isPrivate && !name.startsWith('_'),
         isAsync: false,
         calls,
         complexity: calculateComplexity(body),
@@ -107,6 +129,25 @@ function linesBefore(content: string, index: number): number {
   return content.slice(0, index).split('\n').length - 1;
 }
 
+/**
+ * True when the `def` on `defLine` (0-indexed) follows a bare `private` or
+ * `protected` line in the same class body, with no `public` in between. The
+ * walk stops at the first shallower line, which is the line that opened the
+ * body (`class`, `module`, `class << self`).
+ */
+function underVisibilitySection(lines: string[], defLine: number, indent: number): boolean {
+  for (let i = defLine - 1; i >= 0; i--) {
+    const line = lines[i] ?? '';
+    if (line.trim() === '') continue;
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < indent) return false;
+    if (lineIndent > indent) continue;
+    const keyword = /^\s*(private|protected|public|module_function)\s*(?:#.*)?$/.exec(line)?.[1];
+    if (keyword) return keyword === 'private' || keyword === 'protected';
+  }
+  return false;
+}
+
 function parseParams(raw: string): string[] {
   return raw
     .split(',')
@@ -114,9 +155,14 @@ function parseParams(raw: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * `[?!]?` keeps a predicate or bang suffix on the captured name. Without it
+ * `suppress_messages?()` was recorded as a call to `suppress_messages`, a
+ * name that can never match the method `suppress_messages?`.
+ */
 function extractCalls(body: string, selfName: string): string[] {
   const calls = new Set<string>();
-  const pattern = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*[({]/g;
+  const pattern = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+[?!]?)\s*[({]/g;
   let m: RegExpExecArray | null;
   const SKIP = new Set(['if', 'elsif', 'unless', 'while', 'until', 'for', 'rescue', 'begin', 'end', 'do', 'def', 'class', 'module', 'return', 'puts', 'p', 'pp', selfName]);
   while ((m = pattern.exec(body)) !== null) {

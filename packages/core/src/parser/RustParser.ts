@@ -1,6 +1,7 @@
 import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
+import { LEXICAL_SYNTAX, blankCommentsAndStrings } from './LexicalSyntax.js';
 
 // Every pattern below is anchored on `^` (line start via the `m` flag), but
 // real Rust is almost never actually at column 0 - `mod tests { ... }` (and
@@ -17,8 +18,15 @@ import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 // `[ \t]*` after `^` admits any amount of leading indentation while still
 // matching genuinely top-level (column-0) items exactly as before.
 
-/** fn name<generics>(params) -> ReturnType { */
-const FUNC_DEF = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:<[^>]*>)?\s*\(([^)]*)\)/gm;
+/**
+ * (pub) (const|async|unsafe|extern "C") fn name<generics>(params) -> ReturnType {
+ * Group 1: the `pub` qualifier when present, group 2: name, group 3: params.
+ *
+ * `const fn`, `unsafe fn` and `extern "C" fn` used to be invisible, as was any
+ * function with a nested generic (`<T: Into<String>>`, where `[^>]*` stopped
+ * at the first `>`): about 90 of ripgrep's 2,992 functions.
+ */
+const FUNC_DEF = /^[ \t]*(pub(?:\([^)]*\))?\s+)?(?:(?:const|async|unsafe|extern(?:\s+"[^"]*")?)\s+)*fn\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:<.*?>)?\s*\(([^)]*)\)/gm;
 
 /** struct Name */
 const STRUCT_DEF = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?struct\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)/gm;
@@ -66,14 +74,13 @@ export const RustParser: LanguageParser = {
     // ── Functions ─────────────────────────────────────────────────────────────
     const funcPattern = new RegExp(FUNC_DEF.source, 'gm');
     while ((m = funcPattern.exec(content)) !== null) {
-      const name = m[1];
+      const name = m[2];
       if (!name) continue;
       const startLine = linesBefore(content, m.index) + 1;
-      const prefix = content.slice(Math.max(0, m.index - 5), m.index + 30);
-      const isExported = prefix.includes('pub');
-      const isAsync = prefix.includes('async');
+      const isExported = m[1] !== undefined;
+      const isAsync = /\basync\s/.test(m[0]);
       if (isExported) exports.push(name);
-      const params = parseParams(m[2] ?? '');
+      const params = parseParams(m[3] ?? '');
       const { body, endLine } = extractFunctionBody(lines, startLine - 1);
       const calls = extractCalls(body, name);
 
@@ -123,12 +130,24 @@ function parseParams(raw: string): string[] {
     .filter((p) => p && p !== 'self' && p !== '&self' && p !== '&mut self');
 }
 
+/**
+ * The name immediately before `(`, optionally with a turbofish (`parse::<u32>(`).
+ *
+ * The previous pattern, `name\s*(?:::\s*\w+\s*)?\(`, captured the FIRST
+ * segment of a path call: in `DecompressionReader::new_passthru(path)` it took
+ * `DecompressionReader`, dropped it for being capitalised, and consumed
+ * `new_passthru` so it was never seen. Every `Type::function(...)` and
+ * `Self::helper(...)` call was lost from the call graph that way.
+ */
+const CALL = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*(?:::\s*<[^()]*>\s*)?\(/g;
+
 function extractCalls(body: string, selfName: string): string[] {
   const calls = new Set<string>();
-  const pattern = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*(?:::\s*\w+\s*)?\(/g;
+  const code = blankCommentsAndStrings(body, LEXICAL_SYNTAX.rust!);
+  const pattern = new RegExp(CALL.source, 'g');
   let m: RegExpExecArray | null;
   const SKIP = new Set(['if', 'for', 'while', 'loop', 'match', 'let', 'return', 'panic', 'vec', 'println', 'eprintln', selfName]);
-  while ((m = pattern.exec(body)) !== null) {
+  while ((m = pattern.exec(code)) !== null) {
     const n = m[1];
     if (n && !SKIP.has(n) && /^[a-z]/.test(n)) calls.add(n);
   }

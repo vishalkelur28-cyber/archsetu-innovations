@@ -2,9 +2,12 @@
 
 Static analysis for any codebase on your machine, as a CLI and as an [MCP](https://modelcontextprotocol.io) server.
 
-Everything runs locally. No account, no API key, and your code is never uploaded anywhere. Only one
-command talks to the network at all: `share`, which publishes a page about a project and is described
-below; even that sends measurements and the text you see printed first, never source code.
+Everything runs locally. No account, no API key, and your source files are never uploaded. Two
+commands talk to the network. `share` publishes a page about a project, is described below, and sends
+measurements and the text you see printed first. `submit` uploads an analysis result to archsetu.com
+(function names, paths and measurements, plus the line each security finding flags, with any secret
+on it masked) and checks the versions of your declared dependencies against OSV.dev. Every other
+command, `review` and the MCP server included, makes no network request.
 
 Requires Node.js 20 or newer.
 
@@ -84,7 +87,7 @@ analysis of that repository, and a path it should refuse, then tells you what wo
 
 ```
 ArchSetu MCP self-check
-  version    0.1.22
+  version    0.1.23
   node       v22.15.0
   repository /home/you/your-repo
 
@@ -122,6 +125,78 @@ Running `archsetu mcp` by hand starts a server that waits on stdin and does noth
 ### Protocol
 
 Implements MCP revision `2026-07-28`, where each request carries its own protocol version and the server holds no session state. It also still answers the older `initialize` handshake used by `2025-11-25`, `2025-06-18` and `2025-03-26`. The two eras are not interoperable and a handshake-era client has no way to adapt, so the server answers both and decides per request.
+
+---
+
+## `review`: what a change touches, before you merge it
+
+```bash
+npx -y @archsetuweb/cli@latest review --base origin/main
+```
+
+A diff shows which lines changed. It does not show what depends on the functions those lines are in.
+`review` parses the whole repository, builds its call graph, and reports only what your change touched,
+so the repository's existing problems never show up as yours:
+
+- each changed function, with its direct callers, every function that reaches it within 3 calls, a risk grade from that count, and its complexity before and after;
+- security findings on the lines you changed;
+- functions the change added or made more complex that are now critically complex (above 20);
+- new private functions that nothing calls;
+- packages newly imported in a JavaScript or TypeScript file that no `package.json` declares.
+
+It compares against the point where your branch left `--base` (the merge base), so work that landed on
+the base since does not count as yours. Uncommitted and untracked files are part of the change, so you
+can run it before you commit. Nothing is uploaded.
+
+Run on [PocketBase](https://github.com/pocketbase/pocketbase) at commit `5cdbca2`, which tightened its
+CORS wildcard matching:
+
+```
+$ archsetu review --base HEAD~1
+
+──── ArchSetu review ────
+Compared with 768087993ece (HEAD~1)
+
+2 functions changed
+  exactWildcardMatch apis/middlewares_cors.go:287
+    added, direct callers: 2 in 2 files, within 3 calls: 5 functions in 5 files, risk medium, complexity 11 (new)
+  CORS apis/middlewares_cors.go:131
+    modified, direct callers: 1 in 1 file, within 3 calls: 3 functions in 3 files, risk medium, complexity 33
+```
+
+That commit renamed `matchSubdomain` to `exactWildcardMatch`. A function is paired with its earlier
+version by name, so a rename reads as added. Its two direct callers are `CORS` and the test the same
+commit added.
+
+The report is deterministic: the same change against the same base always gives the same numbers, so a
+count that moves between pushes moved because the code did. Every count comes with the callers behind
+it (in `--json`, and folded under the table with `--markdown`), so any number can be checked. Callers are
+matched by name, and a caller in another file counts only where it could see the function: a function
+that is not exported counts callers in its own directory, and one whose name other files also declare
+counts callers further away only where an import shows which one they mean. Dynamic calls are
+invisible, so read the counts as a lower bound (see [What it will not tell you](#what-it-will-not-tell-you)).
+
+### Options
+
+```
+archsetu review [dir]              # report only changes inside this directory (default: current directory);
+                                   # the whole repository is still analyzed, so callers elsewhere count
+  --base <ref>                     # required: the branch or commit to compare against, e.g. origin/main
+  --markdown                       # the same report as a table, for a pull request comment
+  --json                           # machine-readable, with each function's callers; also carries the Markdown
+  --out <file>                     # write to a file instead of stdout
+  --fail-on <checks>               # exit 1 if the change adds any of: security, complexity, unused, dependencies
+  --max-files <n>                  # cap files analyzed (default: 100000)
+```
+
+Exit codes are distinct so CI can tell a finding from a failure: `0` the review ran and no `--fail-on`
+check found anything, `1` a `--fail-on` check found something, `2` the review could not run (for
+example, not a git repository, or `--base` is not a commit this checkout has). A shallow CI checkout
+needs the base branch fetched before it can compare against it.
+
+To run it on pull requests, a GitHub Action wraps this command:
+[vishalkelur28-cyber/archsetu-action](https://github.com/vishalkelur28-cyber/archsetu-action), used as
+`uses: vishalkelur28-cyber/archsetu-action@v1`.
 
 ---
 
@@ -167,6 +242,7 @@ npx -y @archsetuweb/cli@latest dead-code .        # unreachable functions
 
 Other commands:
 
+- `review --base <ref>`: what a change touches, for a pull request or before you commit (see above).
 - `install-hook --min-score <n>`: a pre-commit hook that blocks a commit when the health score drops below `n`. `uninstall-hook` removes it.
 - `init-ai-rules`: adds an ArchSetu block to your AI assistant's instructions file (Claude Code, Cursor, Copilot).
 - `submit <owner/repo> [dir]`: analyze locally and submit the result to archsetu.com, for repositories too large for the hosted analyzer.

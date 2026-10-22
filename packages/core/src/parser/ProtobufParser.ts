@@ -6,7 +6,7 @@ import { extractFunctionBody } from './BaseParser.js';
 const BLOCK_DEF = /^(message|service|enum)\s+(\w+)\s*\{/gm;
 
 /** rpc MethodName(RequestType) returns (ResponseType); */
-const RPC_DEF = /^\s*rpc\s+(\w+)\s*\(([^)]*)\)\s*returns\s*\(([^)]*)\)/gm;
+const RPC_DEF = /^[ \t]*rpc\s+(\w+)\s*\(([^)]*)\)\s*returns\s*\(([^)]*)\)/gm;
 
 /** import "other.proto"; */
 const IMPORT_STMT = /^import\s+(?:public\s+)?"([^"]+)"/gm;

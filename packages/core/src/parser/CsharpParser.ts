@@ -2,9 +2,16 @@ import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 
-const METHOD_DEF = /^\s*(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|sealed|partial|new|extern)\s+)*(?:[\w<>[\]?]+\s+)+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)\s*(?:where[^{]*)?\s*\{/gm;
+/**
+ * Modifiers and return-type tokens are separated by spaces, never newlines.
+ * With `\s+` here, an attribute on the line above (`[Fact]`, which the type
+ * class admits because of array types) was read as part of the return type,
+ * so the method's start line was the attribute's. `,` and `.` let a type such
+ * as `Dictionary<string, int>` or `System.String` through; neither parsed.
+ */
+const METHOD_DEF = /^[ \t]*(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|sealed|partial|new|extern)[ \t]+)*(?:[\w<>[\]?,.]+[ \t]+)+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)\s*(?:where[^{]*)?\s*\{/gm;
 
-const CLASS_DEF = /^\s*(?:(?:public|private|protected|internal|abstract|sealed|static|partial)\s+)*(?:class|struct|interface|record|enum)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s*:\s*([\w<>.,\s]+))?\s*(?:where[^{]*)?\s*\{/gm;
+const CLASS_DEF = /^[ \t]*(?:(?:public|private|protected|internal|abstract|sealed|static|partial)\s+)*(?:class|struct|interface|record|enum)\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s*:\s*([\w<>.,\s]+))?\s*(?:where[^{]*)?\s*\{/gm;
 
 const USING_STMT = /^using\s+(?:static\s+)?([\w.]+);/gm;
 
@@ -47,10 +54,12 @@ export const CsharpParser: LanguageParser = {
       const name = m[1];
       if (!name) continue;
       if (/^(if|for|while|foreach|switch|catch|return|using|await|new)$/.test(name)) continue;
+      // `return new Widget(x)` followed by an object initializer's `{` is a statement, not a method.
+      if (/^[ \t]*(?:return|new|else|await|throw|yield|case|using|lock)\b/.test(m[0])) continue;
       const startLine = linesBefore(content, m.index) + 1;
-      const prefix = content.slice(Math.max(0, m.index - 5), m.index + 50);
-      const isExported = prefix.includes('public');
-      const isAsync = prefix.includes('async');
+      const declaration = m[0].slice(0, m[0].indexOf(name));
+      const isExported = /\bpublic\b/.test(declaration);
+      const isAsync = /\basync\b/.test(declaration);
       const params = parseParams(m[2] ?? '');
       const { body, endLine } = extractFunctionBody(lines, startLine - 1);
       const calls = extractCalls(body, name);

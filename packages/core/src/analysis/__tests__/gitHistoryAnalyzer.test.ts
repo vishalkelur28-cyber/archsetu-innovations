@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -9,6 +9,7 @@ import {
   calculateBusFactor,
   findHighChurnFiles,
   analyzeGitHistory,
+  raceWithTimeout,
   type CommitFileTouch,
 } from '../GitHistoryAnalyzer.js';
 
@@ -211,5 +212,32 @@ describe('analyzeGitHistory', () => {
     dir = await makeRealGitRepo();
     const result = await analyzeGitHistory(dir, 1);
     expect(result).toBeNull();
+  });
+});
+
+describe('raceWithTimeout', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A timer left pending held `archsetu analyze` open for 90 seconds after
+  // it had finished printing its result.
+  it('leaves no timer behind when the work finishes first', async () => {
+    vi.useFakeTimers();
+    await expect(raceWithTimeout(Promise.resolve('done'), 90_000, 'timed out')).resolves.toBe('done');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('leaves no timer behind when the work fails first', async () => {
+    vi.useFakeTimers();
+    await expect(raceWithTimeout(Promise.reject(new Error('git failed')), 90_000, 'timed out')).rejects.toThrow('git failed');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('still rejects when the work outlasts the timeout', async () => {
+    vi.useFakeTimers();
+    const pending = raceWithTimeout(new Promise<string>(() => {}), 1_000, 'timed out');
+    vi.advanceTimersByTime(1_000);
+    await expect(pending).rejects.toThrow('timed out');
   });
 });

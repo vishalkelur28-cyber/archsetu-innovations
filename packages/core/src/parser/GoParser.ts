@@ -1,6 +1,7 @@
 import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
+import { LEXICAL_SYNTAX, blankCommentsAndStrings } from './LexicalSyntax.js';
 
 /**
  * Go function: func (receiver) FuncName(params) (returns) {
@@ -126,12 +127,18 @@ function parseParams(raw: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Comments and strings are blanked first. A commented-out call is not a call:
+ * pocketbase's only "caller" of `preferGroupBy` was `// if preferGroupBy(...)`,
+ * which kept a function staticcheck reports as unused off the dead-code list.
+ */
 function extractCalls(body: string, selfName: string): string[] {
   const calls = new Set<string>();
+  const code = blankCommentsAndStrings(body, LEXICAL_SYNTAX.go!);
   const pattern = /\b([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(/g;
   let m: RegExpExecArray | null;
   const SKIP = new Set(['if', 'for', 'switch', 'select', 'go', 'defer', 'return', 'make', 'len', 'cap', 'append', 'copy', 'new', selfName]);
-  while ((m = pattern.exec(body)) !== null) {
+  while ((m = pattern.exec(code)) !== null) {
     const n = m[1];
     if (n && !SKIP.has(n)) calls.add(n);
   }

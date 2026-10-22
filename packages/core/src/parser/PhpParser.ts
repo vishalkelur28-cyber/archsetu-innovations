@@ -2,9 +2,9 @@ import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 
-const FUNC_DEF = /^\s*(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)/gm;
+const FUNC_DEF = /^[ \t]*(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)/gm;
 
-const CLASS_DEF = /^\s*(?:(?:abstract|final)\s+)*class\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s+extends\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+))?(?:\s+implements\s+([\w,\s]+))?\s*\{/gm;
+const CLASS_DEF = /^[ \t]*(?:(?:abstract|final)\s+)*class\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s+extends\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+))?(?:\s+implements\s+([\w,\s]+))?\s*\{/gm;
 
 const USE_STMT = /^use\s+([\w\\]+)(?:\s+as\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+))?;/gm;
 const REQUIRE_STMT = /^(?:require|include)(?:_once)?\s*\(?['"]([^'"]+)['"]\)?/gm;

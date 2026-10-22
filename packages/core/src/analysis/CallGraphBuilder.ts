@@ -1,5 +1,5 @@
 import type { FileAnalysis } from '../types/parser.types.js';
-import type { CallGraph, CallGraphEdge, CallGraphNode } from '../types/analysis.types.js';
+import type { CallGraph, CallGraphEdge, CallGraphNode, DeadCodeResult } from '../types/analysis.types.js';
 import { findDeadCode } from './DeadCodeFinder.js';
 import { detectEntryPointsFromAnalyses } from './EntryPointDetector.js';
 
@@ -11,12 +11,17 @@ import { detectEntryPointsFromAnalyses } from './EntryPointDetector.js';
  *
  * For large repos (>500 functions) the graph is automatically clustered by file
  * on the frontend - here we emit the raw node list.
+ *
+ * Pass `deadCode` when the caller already has it. RepoAnalyzer does, and must:
+ * its result comes from findDeadCode with file contents, which this function
+ * no longer has, so recomputing here would mark nodes dead that the Dead Code
+ * list correctly does not.
  */
 export function buildCallGraph(
   fileAnalyses: FileAnalysis[],
   rootDir: string = '',
+  deadCode: DeadCodeResult[] = findDeadCode(fileAnalyses),
 ): CallGraph {
-  const deadCode = findDeadCode(fileAnalyses);
   const deadNames = new Set(deadCode.map((d) => d.function.name));
   const entryPoints = detectEntryPointsFromAnalyses(fileAnalyses, rootDir);
   const entryNames = new Set(entryPoints.map((e) => e.name));
@@ -24,13 +29,17 @@ export function buildCallGraph(
   const nodes: CallGraphNode[] = [];
   const edges: CallGraphEdge[] = [];
 
-  // Build a map of function name → filePath for deduplication
-  // When multiple files define the same function name, we use "name@filePath" as the id
+  // Calls are resolved by name to one node per name (last write wins on
+  // collisions). Ids carry the start line because overloads and same-named
+  // methods of different classes share a name and a file, and an id of
+  // "name@filePath" alone made them one node: a call from one landed on
+  // whichever was declared last, at the wrong line.
   const nodeIdMap = new Map<string, string>(); // functionName → nodeId
+  const idOf = (fn: { name: string; filePath: string; startLine: number }) => `${fn.name}@${fn.filePath}:${fn.startLine}`;
 
   for (const file of fileAnalyses) {
     for (const fn of file.functions) {
-      const id = `${fn.name}@${fn.filePath}`;
+      const id = idOf(fn);
       nodeIdMap.set(fn.name, id); // last-write wins on name collisions
       nodes.push({
         id,
@@ -51,7 +60,7 @@ export function buildCallGraph(
   const edgeSeen = new Set<string>();
   for (const file of fileAnalyses) {
     for (const fn of file.functions) {
-      const sourceId = `${fn.name}@${fn.filePath}`;
+      const sourceId = idOf(fn);
       for (const callee of fn.calls) {
         const targetId = nodeIdMap.get(callee);
         if (!targetId) continue; // callee not found in repo

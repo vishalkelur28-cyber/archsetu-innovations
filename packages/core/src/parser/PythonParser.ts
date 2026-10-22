@@ -2,8 +2,13 @@ import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractIndentedBody, stripStringsAndComments } from './BaseParser.js';
 
-/** def funcName( - captures name and params */
-const FUNC_DEF = /^( *)(?:async\s+)?def\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(([^)]*)\)\s*(?:->.*?)?:/gm;
+/**
+ * def funcName( - captures the indent and name; readSignature takes it from
+ * the opening parenthesis. The whole signature used to be one pattern ending
+ * in `\(([^)]*)\)...:`, which a `()` default (`def f(a=(), b=1):`) stopped
+ * short of the colon, so flask's `send_file` was not found at all.
+ */
+const FUNC_DEF = /^( *)(?:async\s+)?def\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)\s*\(/gm;
 
 /** class ClassName(Base): */
 const CLASS_DEF = /^( *)class\s+([\w\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u4E00-\u9FFF\uAC00-\uD7AF$]+)(?:\s*\(([^)]*)\))?\s*:/gm;
@@ -24,8 +29,12 @@ const REF_AS_VALUE = /[(,[{:=]\s*([A-Za-z_]\w*)\s*(?=[,)\]}:;\n])/g;
 /** A name returned by value: return name */
 const REF_AS_RETURN = /\breturn\s+([A-Za-z_]\w*)\s*(?=[;,\n)}\]])/g;
 
-/** A decorator references the function/callable it decorates: @some_decorator */
-const REF_AS_DECORATOR = /@\s*([A-Za-z_]\w*)/g;
+/**
+ * A decorator references the function/callable it decorates: @some_decorator.
+ * For a dotted one the callable is the last name - `@flask.copy_current_request_context`
+ * used to record only `flask`.
+ */
+const REF_AS_DECORATOR = /@\s*(?:[A-Za-z_]\w*\s*\.\s*)*([A-Za-z_]\w*)/g;
 
 /** Keywords that are never real function/call names, shared by all extraction passes */
 const NON_CALL_KEYWORDS = new Set([
@@ -85,14 +94,17 @@ export const PythonParser: LanguageParser = {
       const indent = (m[1] ?? '').length;
       const name = m[2];
       if (!name) continue;
+      const signature = readSignature(content, m.index + m[0].length - 1);
+      if (!signature) continue;
       const startLine = linesBefore(content, m.index) + 1;
       const isAsync = content.slice(m.index, m.index + 20).includes('async');
       const isTopLevel = indent === 0;
-      const params = parseParams(m[3] ?? '');
-      const { body, endLine } = extractIndentedBody(lines, startLine - 1);
+      const params = parseParams(signature.params);
+      const { body, endLine } = extractIndentedBody(lines, startLine - 1, linesBefore(content, signature.colon));
       const calls = extractCalls(body, name);
 
       if (isTopLevel && !name.startsWith('_')) exports.push(name);
+      const ownerClass = isTopLevel ? null : enclosingClassName(lines, startLine - 1, indent);
 
       functions.push({
         name,
@@ -100,7 +112,12 @@ export const PythonParser: LanguageParser = {
         startLine,
         endLine: endLine + 1,
         parameters: params,
-        isExported: isTopLevel && !name.startsWith('_'),
+        // A method is public API by the same convention as a module-level
+        // function: no leading underscore, on a class without one either.
+        // Treating every method as private reported most of a library's
+        // surface as safe to delete - requests' `Session.close`,
+        // flask's `Flask.open_instance_resource`.
+        isExported: !name.startsWith('_') && (isTopLevel || (ownerClass !== null && !ownerClass.startsWith('_'))),
         isAsync,
         calls,
         complexity: calculateComplexity(body),
@@ -133,11 +150,100 @@ function linesBefore(content: string, index: number): number {
   return content.slice(0, index).split('\n').length - 1;
 }
 
+/**
+ * The class whose body directly holds the `def` on `defLine` (0-indexed), or
+ * null when the nearest enclosing scope is a function or the module.
+ *
+ * `limit` shrinks past every shallower non-scope line (`if TYPE_CHECKING:`,
+ * `try:`, the closing paren of a module-level call), because the scope that
+ * encloses the def must be shallower than each of them too. Without it, a
+ * function under a module-level `if` would be attributed to whatever class
+ * happened to appear earlier in the file.
+ */
+function enclosingClassName(lines: string[], defLine: number, indent: number): string | null {
+  let limit = indent;
+  for (let i = defLine - 1; i >= 0 && limit > 0; i--) {
+    const line = lines[i] ?? '';
+    if (line.trim() === '') continue;
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent >= limit) continue;
+    const scope = /^\s*(?:async\s+)?(class|def)\s+([^\s(:]+)/.exec(line);
+    if (scope) return scope[1] === 'class' ? (scope[2] ?? null) : null;
+    limit = lineIndent;
+  }
+  return null;
+}
+
+/**
+ * Reads a signature from its opening parenthesis: the parameter text, and the
+ * position of the colon that ends the header. Brackets are balanced and quoted
+ * strings skipped, so defaults like `()` or `")"` and annotations like
+ * `dict[str, int]` don't end it early. Returns null when no header colon
+ * follows - a `def` that is really text, not a declaration.
+ */
+function readSignature(content: string, open: number): { params: string; colon: number } | null {
+  let depth = 0;
+  let closed = false;
+  // The parameter text without comments, which may hold unbalanced brackets.
+  let params = '';
+  for (let i = open; i < content.length && i < open + 10_000; i++) {
+    const ch = content[i]!;
+    if (ch === '"' || ch === "'") {
+      const end = content.indexOf(ch, i + 1);
+      if (end < 0) return null;
+      if (!closed) params += content.slice(i, end + 1);
+      i = end;
+      continue;
+    }
+    if (ch === '#') {
+      const end = content.indexOf('\n', i);
+      if (end < 0) return null;
+      i = end - 1;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') {
+      depth++;
+    } else if (ch === ')' || ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0 && !closed) {
+        closed = true;
+        continue;
+      }
+    } else if (ch === ':' && depth === 0 && closed) {
+      return { params, colon: i };
+    } else if (ch === '\n' && depth === 0 && closed) {
+      return null;
+    }
+    if (!closed && i > open) params += ch;
+  }
+  return null;
+}
+
 function parseParams(raw: string): string[] {
-  return raw
-    .split(',')
+  return splitTopLevel(raw)
     .map((p) => p.trim().replace(/[=:].*$/, '').replace(/^\*{1,2}/, '').trim())
     .filter((p) => p && p !== 'self' && p !== 'cls');
+}
+
+/** Splits on commas outside brackets and strings, so `d: dict[str, int]` and `sep=","` each stay one parameter. */
+function splitTopLevel(raw: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (ch === '"' || ch === "'") {
+      const end = raw.indexOf(ch, i + 1);
+      if (end > i) i = end;
+    } else if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    else if (ch === ',' && depth === 0) {
+      parts.push(raw.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(raw.slice(start));
+  return parts;
 }
 
 /**

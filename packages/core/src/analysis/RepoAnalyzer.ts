@@ -46,7 +46,10 @@ const OVERSIZED_LINE_THRESHOLD = 300;
  */
 export async function analyzeRepo(
   rootDir: string,
-  options: { maxFiles?: number } = {},
+  // `uncapped` skips step 6's size caps, for a caller that reads the result in
+  // memory instead of storing it - a review has to see every changed
+  // function and every caller, and the cap drops the least-connected first.
+  options: { maxFiles?: number; uncapped?: boolean } = {},
 ): Promise<RepoAnalysis> {
   // ── 1. Walk and parse ──────────────────────────────────────────────────────
   const { files: walkedFiles, truncated } = await walkRepo(rootDir, options);
@@ -81,7 +84,10 @@ export async function analyzeRepo(
   const oversizedFileRatio = totalFiles > 0 ? oversizedFileCount / totalFiles : 0;
 
   // ── 3. Analysis passes ────────────────────────────────────────────────────
-  const deadCode = findDeadCode(fileAnalyses);
+  // Given the file contents, findDeadCode also counts uses that are not
+  // call syntax - a handler registered by value, a paren-less Ruby call - so
+  // it has to run here, before fileContentMap is released below.
+  const deadCode = findDeadCode(fileAnalyses, fileContentMap);
   // The health score's deadCodeRatio counts only confidently-dead functions
   // (isSafeToRemove: private, non-test, zero known callers) - not every
   // zero-caller function. An exported function with zero known callers is
@@ -117,7 +123,7 @@ export async function analyzeRepo(
   const securityRisk = analyzeSecurityRisk(fileAnalyses, fileContentMap);
   fileContentMap.clear();
 
-  const callGraph = buildCallGraph(fileAnalyses, rootDir);
+  const callGraph = buildCallGraph(fileAnalyses, rootDir, deadCode);
   const entryPoints = detectEntryPointsFromAnalyses(fileAnalyses, rootDir);
   const complexity = analyzeComplexity(fileAnalyses);
   const onboarding = buildOnboardingGuide(fileAnalyses, callGraph, entryPoints);
@@ -193,9 +199,10 @@ export async function analyzeRepo(
   // sized, storable, renderable artifact instead of growing without limit.
   // See ResultSizeCapper's doc comment for why this lives here rather than
   // relying on a storage provider's size limit alone.
-  const cappedCallGraph = capCallGraph(callGraph);
-  const cappedComplexity = capComplexityDetail(complexity);
-  const cappedDeadCode = capDeadCode(deadCode);
+  const uncapped = <T,>(value: T) => ({ value, truncated: false });
+  const cappedCallGraph = options.uncapped ? uncapped(callGraph) : capCallGraph(callGraph);
+  const cappedComplexity = options.uncapped ? uncapped(complexity) : capComplexityDetail(complexity);
+  const cappedDeadCode = options.uncapped ? uncapped(deadCode) : capDeadCode(deadCode);
   const detailTruncated = cappedCallGraph.truncated || cappedComplexity.truncated || cappedDeadCode.truncated;
 
   return {

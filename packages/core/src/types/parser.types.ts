@@ -69,6 +69,14 @@ export interface ParsedFunction {
    * Next.js `page.tsx` default export) - see FrameworkConventions.ts.
    */
   isDefaultExport?: boolean;
+  /**
+   * True when something outside this repository's code calls the function by
+   * contract - a test runner (`#[test]`, `@Test`), a framework annotation
+   * (`@GetMapping`, `@app.route`), the language runtime (`__exit__`), or
+   * dispatch through a supertype (`@Override`, `impl Trait for T`). Set by
+   * markImplicitlyInvoked after parsing; DeadCodeFinder never reports these.
+   */
+  isImplicitlyInvoked?: boolean;
   isAsync: boolean;
   /** Names of functions this function calls within the same repo */
   calls: string[];
@@ -120,6 +128,12 @@ export interface FileAnalysis {
    * intentionally not used to draw call-graph edges since there's no known caller.
    */
   moduleLevelCalls?: string[];
+  /**
+   * True when the file carries a generator's header (`Code generated ... DO
+   * NOT EDIT.`, `@generated`). Its functions are never reported as dead code:
+   * the fix for an unused generated function is to regenerate, not to edit.
+   */
+  isGenerated?: boolean;
 }
 
 export interface LanguageParser {

@@ -3,7 +3,7 @@ import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from 
 import { calculateComplexity } from './BaseParser.js';
 
 /** function! Name(args) or function Name(args) - a leading s: means script-local (private). */
-const FUNC_DEF = /^\s*function!?\s+(s:)?([\w#.]+)\s*\(([^)]*)\)/gm;
+const FUNC_DEF = /^[ \t]*function!?\s+(s:)?([\w#.]+)\s*\(([^)]*)\)/gm;
 
 /** source path/to/file.vim  OR  runtime plugin/file.vim */
 const SOURCE_STMT = /^(?:source|runtime!?)\s+(.+)$/gm;

@@ -1,6 +1,6 @@
 {
   "name": "@archsetuweb/cli",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "mcpName": "io.github.vishalkelur28-cyber/archsetu",
   "description": "MCP server and CLI that tells your coding agent what it is about to break: blast radius, dead code, and health for any local codebase. Runs entirely on your machine.",
   "license": "MIT",

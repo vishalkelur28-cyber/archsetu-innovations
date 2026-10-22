@@ -6,7 +6,7 @@ import { extractFunctionBody } from './BaseParser.js';
 const TYPE_DEF = /^(type|interface|input|enum)\s+(\w+)(?:\s+implements\s+[\w\s&]+)?\s*\{/gm;
 
 /** A field shaped like a resolver: name(arg: Type, ...): ReturnType - has parentheses, unlike a plain data field. */
-const RESOLVER_FIELD = /^\s*(\w+)\s*\(([^)]*)\)\s*:/gm;
+const RESOLVER_FIELD = /^[ \t]*(\w+)\s*\(([^)]*)\)\s*:/gm;
 
 export const GraphQLParser: LanguageParser = {
   language: 'graphql',

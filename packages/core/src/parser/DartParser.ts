@@ -2,8 +2,8 @@ import path from 'path';
 import type { FileAnalysis, LanguageParser, ParsedFunction, ParsedImport } from '../types/parser.types.js';
 import { calculateComplexity, extractFunctionBody } from './BaseParser.js';
 
-const FUNC_DEF = /^\s*(?:(?:static|async|external|abstract)\s+)*(?:[\w<>?[\]]+\s+)?(\w+)\s*\(([^)]*)\)\s*(?:async\s*)?\s*\{/gm;
-const CLASS_DEF = /^\s*(?:(?:abstract|mixin)\s+)*class\s+(\w+)/gm;
+const FUNC_DEF = /^[ \t]*(?:(?:static|async|external|abstract)\s+)*(?:[\w<>?[\]]+\s+)?(\w+)\s*\(([^)]*)\)\s*(?:async\s*)?\s*\{/gm;
+const CLASS_DEF = /^[ \t]*(?:(?:abstract|mixin)\s+)*class\s+(\w+)/gm;
 const IMPORT_STMT = /^import\s+['"]([^'"]+)['"]/gm;
 
 export const DartParser: LanguageParser = {
